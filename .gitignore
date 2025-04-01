@@ -1,0 +1,16 @@
+# pycache file
+*.pyc
+
+# experiment folder
+src/experiments/
+
+# test file
+temp.py
+
+# datasets
+*.parquet
+*.csv
+*.xls
+
+# vscode file
+.vscode/
