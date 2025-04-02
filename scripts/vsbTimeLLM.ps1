@@ -13,14 +13,14 @@ foreach ($patch in 4) {
                 --output_dir ./src/experiments `
                 --comment "forecasting using gpt2" `
                 --seed 42 `
-                --name long_fore `
+                --name "long forecasting ETTh1" `
                 --records_file LongForecast_records.xls `
                 --root_path ./src/datasets/ETT-small/ `
                 --data_path ETTm1.csv `
                 --data ETTh1 `
                 --features M `
                 --epochs 10 `
-                --batch_size 24 `
+                --batch_size 256 `
                 --lr $lr `
                 --patch_size $patch `
                 --stride $stride `
@@ -32,7 +32,7 @@ foreach ($patch in 4) {
                 --model GPT4TS `
                 --enc_in 7 `
                 --d_ff 128 `
-                # --prompt_domain 1 ` # if use prompt, note off this line
+        
         }
     }
 }
