@@ -53,7 +53,7 @@ class Options(object):
         )
         self.parser.add_argument(
             "--records_file",
-            default="./records.xls",
+            default="./records.xlsx",
             help="Excel file keeping all records of experiments",
         )
 
@@ -152,7 +152,7 @@ class Options(object):
             "--optimizer", choices={"Adam", "RAdam"}, default="Adam", help="Optimizer"
         )
         self.parser.add_argument(
-            "--patience", type=int, default=10, help="early stopping patience"
+            "--patience", type=int, default=3, help="early stopping patience"
         )
         self.parser.add_argument(
             "--lr",

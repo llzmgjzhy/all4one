@@ -3,9 +3,7 @@ import os
 import sys
 import builtins
 import torch
-import xlrd
-import xlwt
-from xlutils.copy import copy
+from openpyxl import Workbook,load_workbook
 
 import logging
 
@@ -95,7 +93,8 @@ def export_performance_metrics(
     """Exports performance metrics on the validation set for all epochs to an excel file"""
 
     if book is None:
-        book = xlwt.Workbook()  # new excel work book
+        book = Workbook()   # new excel work book
+        del book["Sheet"]  # remove default sheet
 
     book = write_table_to_sheet([header] + metrics_table, book, sheet_name=sheet_name)
 
@@ -108,7 +107,7 @@ def export_performance_metrics(
 def write_table_to_sheet(table, work_book, sheet_name=None):
     """Writes a table implemented as a list of lists to an excel sheet in the given work book object"""
 
-    sheet = work_book.add_sheet(sheet_name)
+    sheet = work_book.create_sheet(sheet_name,index=0)
 
     for row_ind, row_list in enumerate(table):
         write_row(sheet, row_ind, row_list)
@@ -119,9 +118,9 @@ def write_table_to_sheet(table, work_book, sheet_name=None):
 def write_row(sheet, row_ind, data_list):
     """Write a list to row_ind row of an excel sheet"""
 
-    row = sheet.row(row_ind)
-    for col_ind, col_value in enumerate(data_list):
-        row.write(col_ind, col_value)
+    # row = sheet.row(row_ind)
+    for col_ind, col_value in enumerate(data_list, start=1):
+        sheet.cell(row=row_ind+1, column=col_ind, value=col_value) # row and col starts from 1 in openpyxl
     return
 
 
@@ -151,14 +150,13 @@ def matthews_correlation(y_true, y_pred):
 def export_record(filepath, values):
     """Adds a list of values as a bottom row of a table in a given excel file"""
 
-    read_book = xlrd.open_workbook(filepath, formatting_info=True)
-    read_sheet = read_book.sheet_by_index(0)
-    last_row = read_sheet.nrows
+    # read_book = xlrd.open_workbook(filepath, formatting_info=True)
+    read_book = load_workbook(filepath)
+    sheet = read_book.active
+    last_row = sheet.max_row
 
-    work_book = copy(read_book)
-    sheet = work_book.get_sheet(0)
     write_row(sheet, last_row, values)
-    work_book.save(filepath)
+    read_book.save(filepath)
 
 
 def register_record(
@@ -191,7 +189,8 @@ def register_record(
         header = ["Timestamp", "Name", "Comment"] + ["Best " + m for m in metrics_names]
         if final_metrics is not None:
             header += ["Final " + m for m in final_metrics_names]
-        book = xlwt.Workbook()  # excel work book
+        book = Workbook()   # new excel work book
+        del book["Sheet"]  # excel work book
         book = write_table_to_sheet([header, row_values], book, sheet_name="records")
         book.save(filepath)
     else:
@@ -240,10 +239,8 @@ def register_test_record(
         row_values += list(final_metrics_values)
 
     if test_metrics is not None:
-        test_metrics_names, test_metrics_values = zip(
-            *test_metrics.items(test_metrics_values)
-        )
-        row_values += list()
+        test_metrics_names, test_metrics_values = zip(*test_metrics.items())
+        row_values += list(test_metrics_values)
 
     if not os.path.exists(filepath):  # Create a records file for the first time
         logger.warning(
@@ -257,7 +254,8 @@ def register_test_record(
             header += ["Final " + m for m in final_metrics_names]
         if test_metrics is not None:
             header += [m for m in test_metrics_names]
-        book = xlwt.Workbook()  # excel work book
+        book = Workbook()   # new excel work book
+        del book["Sheet"]  # excel work book
         book = write_table_to_sheet([header, row_values], book, sheet_name="records")
         book.save(filepath)
     else:

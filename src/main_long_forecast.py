@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import time
+import copy
 
 from tqdm import tqdm
 import torch
@@ -60,7 +61,7 @@ def main(config):
     )
 
     train_steps = len(train_loader)
-    early_stopping = EarlyStopping(accelerator=accelerator, patience=args.patience)
+    early_stopping = EarlyStopping(accelerator=accelerator, patience=config.patience)
 
     # initialize the optimizer
     optim_class = get_optimizer(config.optimizer)
@@ -88,8 +89,6 @@ def main(config):
     )
 
     start_epoch = 0
-    lr_step = 0  # current step index of `lr_step`
-    lr = config.lr  # current learning step
 
     # initialize runner, responsible for training, validation and testing
     runner_class = pipeline_factory(config)
@@ -145,7 +144,7 @@ def main(config):
             epoch
         )  # dictionary of aggregate epoch metrics
         epoch_runtime = time.time() - epoch_start_time
-        print()
+        accelerator.print()
         print_str = f"Epoch {epoch} Training Summary: "
         for k, v in aggr_metrics_train.items():
             tensorboard_writer.add_scalar(f"{k}/train", v, epoch)
@@ -188,19 +187,19 @@ def main(config):
             metrics.append(list(metrics_values))
             early_stopping(best_value)
             if early_stopping.early_stop:
-                print("Early stopping")
+                accelerator.print("Early stopping")
                 break
 
         # Learning rate scheduling
-        if args.cos:
+        if config.lradj == "COS":
             scheduler.step()
-            print("lr = {:.10f}".format(optimizer.param_groups[0]["lr"]))
+            accelerator.print("lr = {:.10f}".format(optimizer.param_groups[0]["lr"]))
         else:
-            adjust_learning_rate(optimizer, epoch + 1, args)
+            adjust_learning_rate(optimizer, epoch + 1, config)
 
 
     # testing
-    model.load_state_dict(torch.load(os.path.join(config.save_dir, "model_best.pth")))
+    model.load_state_dict(torch.load(os.path.join(config.save_dir, "model_best.pth"))["state_dict"])
     test_evaluator = runner_class(
         model,
         test_loader,
@@ -216,7 +215,7 @@ def main(config):
     # Export evolution of metrics over epochs
     header = metrics_names
     metrics_filepath = os.path.join(
-        config.output_dir, "metrics_" + config.experiment_name + ".xls"
+        config.output_dir, "metrics_" + config.experiment_name + ".xlsx"
     )
     book = utils.export_performance_metrics(
         metrics_filepath, metrics, header, sheet_name="metrics"
@@ -258,7 +257,9 @@ if __name__ == "__main__":
     logger.info("Loading packages ...")
 
     args = Options().parse()  # `argparse` object
-    config = setup(args)
-    for ii in range(config.itr):
-        config.comment += f" itr{ii}"
+    origin_comment = args.comment
+    args_itr = copy.deepcopy(args)  # prevent itr forloop to change output_dir
+    for ii in range(args.itr):
+        config = setup(args_itr)  # save expriment files itr times
+        config.comment = origin_comment + f" itr{ii}"
         main(config)

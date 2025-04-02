@@ -4,8 +4,6 @@ import json
 from datetime import datetime
 import random
 import string
-import sys
-import traceback
 from collections import OrderedDict
 from utils import utils
 import torch
@@ -166,24 +164,24 @@ class ForecastingSupervisedRunner(BaseRunner):
             targets = targets[:, -self.config.pred_len :, f_dim:]
 
             loss = self.loss_module(predictions, targets)
-            batch_loss = torch.sum(loss)
-            mean_loss = batch_loss / len(loss)  # mean loss (over samples)
+            batch_loss = loss.sum()
+            mean_loss = loss.mean()  # mean loss (over samples)
 
             # Zero gradients, perform a backward pass, and update the weights.
-            self.accelerator.backward(loss)  # for mixed precision training
+            self.accelerator.backward(mean_loss)  # for mixed precision training
 
             # torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)
             # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
             self.optimizer.step()
 
-            metrics = {"loss": loss.item()}
+            metrics = {"loss": mean_loss.item()}
             if i % self.print_interval == 0:
                 ending = "" if epoch_num is None else "Epoch {} ".format(epoch_num)
                 self.print_callback(i, metrics, prefix="Training " + ending)
 
             with torch.no_grad():
-                total_samples += len(loss)
-                epoch_loss += loss.item()  # add total loss of batch
+                total_samples += loss.numel()
+                epoch_loss += batch_loss.item()  # add total loss of batch
 
         epoch_loss = (
             epoch_loss / total_samples
@@ -217,12 +215,12 @@ class ForecastingSupervisedRunner(BaseRunner):
             targets = targets[:, -self.config.pred_len :, f_dim:]
 
             mse_loss = self.loss_module(predictions, targets)
-            batch_mse_loss = torch.sum(mse_loss)
-            mean_mse_loss = batch_mse_loss / len(mse_loss)  # mean loss (over samples)
+            batch_mse_loss = mse_loss.sum()
+            mean_mse_loss = mse_loss.mean()  # mean loss (over samples)
             # (batch_size,) loss for each sample in the batch
             mae_loss = self.mae_criterion(predictions, targets)
-            batch_mae_loss = torch.sum(mae_loss)
-            mean_mae_loss = batch_mae_loss / len(mae_loss)
+            batch_mae_loss = mae_loss.sum()
+            mean_mae_loss = mae_loss.mean()
 
             per_batch["targets"].append(targets.cpu().numpy())
             per_batch["predictions"].append(predictions.cpu().numpy())
@@ -236,7 +234,7 @@ class ForecastingSupervisedRunner(BaseRunner):
                 ending = "" if epoch_num is None else "Epoch {} ".format(epoch_num)
                 self.print_callback(i, metrics, prefix="Evaluating " + ending)
 
-            total_samples += len(mse_loss)
+            total_samples += mse_loss.numel()
             epoch_mse_loss += batch_mse_loss.cpu().item()  # add total loss of batch
             epoch_mae_loss += batch_mae_loss.cpu().item()
 
@@ -471,13 +469,14 @@ def validate(
     return aggr_metrics, best_metrics, best_value
 
 
-def test(test_evaluator, config):
+def test(test_evaluator):
     """Run an evaluation on the validation set while logging metrics, and handle outcome"""
 
     logger.info("Testing on test set ...")
     eval_start_time = time.time()
     with torch.no_grad():
-        aggr_metrics, per_batch = test_evaluator.evaluate(keep_all=False)
+        aggr_metrics, per_batch = test_evaluator.evaluate(epoch_num=None,keep_all=True)
+        del aggr_metrics["epoch"]
     aggr_metrics = {f"test_{key}": value for key, value in aggr_metrics.items()}
     eval_runtime = time.time() - eval_start_time
     logger.info(
