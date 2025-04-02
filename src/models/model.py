@@ -99,18 +99,14 @@ class GPT4TS(nn.Module):
             else:
                 print("------------------no pretrain------------------")
                 self.gpt2 = GPT2Model(GPT2Config())
-            self.gpt2.h = self.gpt2.h[: configs.gpt_layers]
+            self.gpt2.h = self.gpt2.h[: configs.llm_layers]
             print("gpt2 = {}".format(self.gpt2))
 
-        self.in_layer = nn.Linear(configs.patch_size, configs.d_model)
-        self.out_layer = nn.Linear(configs.d_model * self.patch_num, configs.pred_len)
+        self.in_layer = nn.Linear(configs.patch_size, configs.llm_dim)
+        self.out_layer = nn.Linear(configs.llm_dim * self.patch_num, configs.pred_len)
 
-        if configs.freeze and configs.pretrain:
-            for i, (name, param) in enumerate(self.gpt2.named_parameters()):
-                if "ln" in name or "wpe" in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
+        for param in self.gpt2.parameters():
+            param.requires_grad = False
 
         for layer in (self.gpt2, self.in_layer, self.out_layer):
             layer.to(device=device)
@@ -118,7 +114,7 @@ class GPT4TS(nn.Module):
 
         self.cnt = 0
 
-    def forward(self, x, itr):
+    def forward(self, x, x_mark, y, y_mark):
         B, L, M = x.shape
 
         means = x.mean(1, keepdim=True).detach()
@@ -134,7 +130,7 @@ class GPT4TS(nn.Module):
         x = x.unfold(dimension=-1, size=self.patch_size, step=self.stride)
         x = rearrange(x, "b m n p -> (b m) n p")
 
-        outputs = self.in_layer(x)
+        outputs = self.in_layer(x.float())
         if self.is_gpt:
             outputs = self.gpt2(inputs_embeds=outputs).last_hidden_state
 

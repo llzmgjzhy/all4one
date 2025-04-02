@@ -6,7 +6,7 @@ import torch
 
 def get_loss_module(config):
 
-    loss_type = config["loss"]
+    loss_type = config.loss
 
     if loss_type == "cross_entropy":
         return NoFussCrossEntropyLoss(

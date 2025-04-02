@@ -4,18 +4,21 @@ $stride = 2
 $lr = 0.0001
 
 # 循环
-foreach ($patch in 500) {
-    foreach ($stride in 500) {
+foreach ($patch in 4) {
+    foreach ($stride in 2) {
         foreach ($lr in 0.0001) {
 
             python src/main_long_forecast.py `
-                --task classification `
+                --task forecast `
                 --output_dir ./src/experiments `
                 --comment "forecasting using gpt2" `
                 --seed 42 `
                 --name long_fore `
                 --records_file LongForecast_records.xls `
-                --data_dir ./src/datasets/ETT-small/ `
+                --root_path ./src/datasets/ETT-small/ `
+                --data_path ETTm1.csv `
+                --data ETTh1 `
+                --features M `
                 --epochs 10 `
                 --batch_size 24 `
                 --lr $lr `

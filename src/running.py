@@ -33,7 +33,7 @@ def setup(args):
         config: configuration dictionary
     """
 
-    config = args.__dict__  # configuration dictionary
+    # config = args.__dict__  # configuration dictionary
 
     # if args.config_filepath is not None:
     #     logger.info("Reading configuration ...")
@@ -48,43 +48,38 @@ def setup(args):
 
     # Create output directory
     initial_timestamp = datetime.now()
-    output_dir = config["output_dir"]
-    if not os.path.isdir(output_dir):
+    if not os.path.isdir(args.output_dir):
         raise IOError(
-            "Root directory '{}', where the directory of the experiment will be created, must exist".format(
-                output_dir
-            )
+            f"Root directory '{args.output_dir}', where the directory of the experiment will be created, must exist"
         )
 
-    output_dir = os.path.join(output_dir, config["experiment_name"])
+    output_dir = os.path.join(args.output_dir, args.experiment_name)
 
     formatted_timestamp = initial_timestamp.strftime("%Y-%m-%d_%H-%M-%S")
-    config["initial_timestamp"] = formatted_timestamp
-    if (not config["no_timestamp"]) or (len(config["experiment_name"]) == 0):
+    args.initial_timestamp = formatted_timestamp
+    if (not args.no_timestamp) or (len(args.experiment_name) == 0):
         rand_suffix = "".join(random.choices(string.ascii_letters + string.digits, k=3))
-        output_dir += "_" + formatted_timestamp + "_" + rand_suffix
-    config["output_dir"] = output_dir
-    config["save_dir"] = os.path.join(output_dir, "checkpoints")
-    config["pred_dir"] = os.path.join(output_dir, "predictions")
-    config["tensorboard_dir"] = os.path.join(output_dir, "tb_summaries")
-    utils.create_dirs(
-        [config["save_dir"], config["pred_dir"], config["tensorboard_dir"]]
-    )
+        output_dir += f"_{formatted_timestamp}_{rand_suffix}"
+    args.output_dir = output_dir
+    args.save_dir = os.path.join(output_dir, "checkpoints")
+    args.pred_dir = os.path.join(output_dir, "predictions")
+    args.tensorboard_dir = os.path.join(output_dir, "tb_summaries")
+    utils.create_dirs([args.save_dir, args.pred_dir, args.tensorboard_dir])
 
     # Save configuration as a (pretty) json file
     with open(os.path.join(output_dir, "configuration.json"), "w") as fp:
-        json.dump(config, fp, indent=4, sort_keys=True)
+        json.dump(vars(args), fp, indent=4, sort_keys=True)
 
     logger.info("Stored configuration file in '{}'".format(output_dir))
 
-    return config
+    return args
 
 
 def pipeline_factory(config):
     """For the task specified in the configuration returns the corresponding combination of
     Dataset class, collate function and Runner class."""
 
-    task = config["task"]
+    task = config.task
 
     if (task == "classification") or (task == "regression"):
         return VSBDataset, collate_superv, SupervisedRunner
@@ -102,10 +97,12 @@ class BaseRunner(object):
         dataloader,
         device,
         loss_module,
+        config,
         optimizer=None,
         l2_reg=None,
         print_interval=10,
         console=True,
+        accelerator=None,
     ):
 
         self.model = model
@@ -113,9 +110,11 @@ class BaseRunner(object):
         self.device = device
         self.optimizer = optimizer
         self.loss_module = loss_module
+        self.config = config
         self.l2_reg = l2_reg
         self.print_interval = print_interval
         self.printer = utils.Printer(console=console)
+        self.accelerator = accelerator
 
         self.epoch_metrics = OrderedDict()
 
@@ -147,7 +146,6 @@ class ForecastingSupervisedRunner(BaseRunner):
         super(ForecastingSupervisedRunner, self).__init__(*args, **kwargs)
 
         self.mae_criterion = torch.nn.L1Loss(reduction="none")
-        self.accelerator = kwargs.get("accelerator", None)
 
     def train_epoch(self, epoch_num=None):
 
@@ -161,6 +159,10 @@ class ForecastingSupervisedRunner(BaseRunner):
             X, targets, x_mask, y_mask = batch
             targets = targets.to(self.device)
             predictions = self.model(X.to(self.device), x_mask, targets, y_mask)
+
+            f_dim = -1 if self.config.features == "MS" else 0
+            predictions = predictions[:, -self.config.pred_len :, f_dim:]
+            targets = targets[:, -self.config.pred_len :, f_dim:]
 
             loss = self.loss_module(
                 predictions, targets
@@ -203,7 +205,8 @@ class ForecastingSupervisedRunner(BaseRunner):
 
         self.model = self.model.eval()
 
-        epoch_loss = 0  # total loss of epoch
+        epoch_mse_loss = 0  # total loss of epoch
+        epoch_mae_loss = 0
         total_samples = 0  # total samples in epoch
 
         per_batch = {
@@ -217,6 +220,10 @@ class ForecastingSupervisedRunner(BaseRunner):
             X, targets, x_mask, y_mask = batch
             targets = targets.to(self.device)
             predictions = self.model(X.to(self.device), x_mask, targets, y_mask)
+
+            f_dim = -1 if self.config.features == "MS" else 0
+            predictions = predictions[:, -self.config.pred_len :, f_dim:]
+            targets = targets[:, -self.config.pred_len :, f_dim:]
 
             mse_loss = self.loss_module(
                 predictions, targets
@@ -449,20 +456,20 @@ def validate(
         print_str += "{}: {:8f} | ".format(k, v)
     logger.info(print_str)
 
-    if config["key_metric"] in NEG_METRICS:
-        condition = aggr_metrics[config["key_metric"]] < best_value
+    if config.key_metric in NEG_METRICS:
+        condition = aggr_metrics[config.key_metric] < best_value
     else:
-        condition = aggr_metrics[config["key_metric"]] > best_value
+        condition = aggr_metrics[config.key_metric] > best_value
     if condition:
-        best_value = aggr_metrics[config["key_metric"]]
+        best_value = aggr_metrics[config.key_metric]
         utils.save_model(
-            os.path.join(config["save_dir"], "model_best.pth"),
+            os.path.join(config.save_dir, "model_best.pth"),
             epoch,
             val_evaluator.model,
         )
         best_metrics = aggr_metrics.copy()
 
-        pred_filepath = os.path.join(config["pred_dir"], "best_predictions")
+        pred_filepath = os.path.join(config.pred_dir, "best_predictions")
         for key in per_batch.keys():
             per_batch[key] = np.array(
                 per_batch[key], dtype=object
