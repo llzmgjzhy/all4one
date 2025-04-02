@@ -141,6 +141,7 @@ class Options(object):
         self.parser.add_argument(
             "--epochs", type=int, default=50, help="Number of training epochs"
         )
+        self.parser.add_argument("--itr", type=int, default=3)
         self.parser.add_argument(
             "--val_interval",
             type=int,
@@ -149,6 +150,9 @@ class Options(object):
         )
         self.parser.add_argument(
             "--optimizer", choices={"Adam", "RAdam"}, default="Adam", help="Optimizer"
+        )
+        self.parser.add_argument(
+            "--patience", type=int, default=10, help="early stopping patience"
         )
         self.parser.add_argument(
             "--lr",

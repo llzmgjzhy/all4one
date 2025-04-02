@@ -210,3 +210,69 @@ def register_record(
             filepath = alt_path
 
     logger.info("Exported performance record to '{}'".format(filepath))
+
+
+def register_test_record(
+    filepath,
+    timestamp,
+    experiment_name,
+    best_metrics,
+    final_metrics=None,
+    test_metrics=None,
+    comment="",
+):
+    """
+    Adds the best and final metrics of a given experiment as a record in an excel sheet with other experiment records.
+    Creates excel sheet if it doesn't exist.
+    Args:
+        filepath: path of excel file keeping records
+        timestamp: string
+        experiment_name: string
+        best_metrics: dict of metrics at best epoch {metric_name: metric_value}. Includes "epoch" as first key
+        final_metrics: dict of metrics at final epoch {metric_name: metric_value}. Includes "epoch" as first key
+        test_metrics: dict of metrics at test stage {metric_name: metric_value}.
+        comment: optional description
+    """
+    metrics_names, metrics_values = zip(*best_metrics.items())
+    row_values = [timestamp, experiment_name, comment] + list(metrics_values)
+    if final_metrics is not None:
+        final_metrics_names, final_metrics_values = zip(*final_metrics.items())
+        row_values += list(final_metrics_values)
+
+    if test_metrics is not None:
+        test_metrics_names, test_metrics_values = zip(
+            *test_metrics.items(test_metrics_values)
+        )
+        row_values += list()
+
+    if not os.path.exists(filepath):  # Create a records file for the first time
+        logger.warning(
+            "Records file '{}' does not exist! Creating new file ...".format(filepath)
+        )
+        directory = os.path.dirname(filepath)
+        if len(directory) and not os.path.exists(directory):
+            os.makedirs(directory)
+        header = ["Timestamp", "Name", "Comment"] + ["Best " + m for m in metrics_names]
+        if final_metrics is not None:
+            header += ["Final " + m for m in final_metrics_names]
+        if test_metrics is not None:
+            header += [m for m in test_metrics_names]
+        book = xlwt.Workbook()  # excel work book
+        book = write_table_to_sheet([header, row_values], book, sheet_name="records")
+        book.save(filepath)
+    else:
+        try:
+            export_record(filepath, row_values)
+        except Exception as x:
+            alt_path = os.path.join(
+                os.path.dirname(filepath), "record_" + experiment_name
+            )
+            logger.error(
+                "Failed saving in: '{}'! Will save here instead: {}".format(
+                    filepath, alt_path
+                )
+            )
+            export_record(alt_path, row_values)
+            filepath = alt_path
+
+    logger.info("Exported performance record to '{}'".format(filepath))

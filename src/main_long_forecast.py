@@ -12,16 +12,16 @@ import random
 from accelerate import Accelerator
 
 from options import Options
-from running import setup, pipeline_factory, check_progress, validate, NEG_METRICS
+from running import setup, pipeline_factory, validate, test, NEG_METRICS
 from utils import utils
 from optimizers import get_optimizer
 from models.model import model_factory
 from models.loss import get_loss_module
 from datasets.data_factory import data_provider
+from utils.tools import EarlyStopping, adjust_learning_rate
 
 
 def main(config):
-
     total_epoch_time = 0
     total_start_time = time.time()
     accelerator = Accelerator()
@@ -37,9 +37,7 @@ def main(config):
         torch.manual_seed(config.seed)
         np.random.seed(config.seed)
 
-    device = torch.device(
-        "cuda" if (torch.cuda.is_available() and config.gpu != -1) else "cpu"
-    )
+    device = torch.device("cuda:0")
     logger.info(f"Using device: {device}")
     if device == "cuda":
         logger.info(f"Device index: {torch.cuda.current_device()}")
@@ -51,7 +49,6 @@ def main(config):
     test_dataset, test_loader = data_provider(config, "test")
 
     # Create model
-
     logger.info("Creating model ...")
     model_class = model_factory[config.model_name]
     model = model_class(config, device)
@@ -63,16 +60,18 @@ def main(config):
     )
 
     train_steps = len(train_loader)
+    early_stopping = EarlyStopping(accelerator=accelerator, patience=args.patience)
 
     # initialize the optimizer
     optim_class = get_optimizer(config.optimizer)
     optimizer = optim_class(model.parameters(), lr=config.lr)
 
+    # loss criterion
+    loss_module = get_loss_module(config)
+
     # initialize the scheduler
     if config.lradj == "COS":
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=20, eta_min=1e-8
-        )
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=20, eta_min=1e-8)
     else:
         scheduler = lr_scheduler.OneCycleLR(
             optimizer=optimizer,
@@ -92,9 +91,7 @@ def main(config):
     lr_step = 0  # current step index of `lr_step`
     lr = config.lr  # current learning step
 
-    loss_module = get_loss_module(config)
-
-    # initialize data generators
+    # initialize runner, responsible for training, validation and testing
     runner_class = pipeline_factory(config)
 
     trainer = runner_class(
@@ -138,11 +135,10 @@ def main(config):
 
     logger.info("Starting training...")
 
-    for epoch in tqdm(
-        range(start_epoch + 1, config.epochs + 1),
-        desc="Training Epoch",
-        leave=False,
-    ):
+    # training
+    # fmt: off
+    for epoch in tqdm(range(start_epoch + 1, config.epochs + 1), desc="Training Epoch", leave=False):
+    # fmt: on
         # mark = epoch if config["save_all"] else "last"
         epoch_start_time = time.time()
         aggr_metrics_train = trainer.train_epoch(
@@ -190,31 +186,32 @@ def main(config):
             )
             metrics_names, metrics_values = zip(*aggr_metrics_val.items())
             metrics.append(list(metrics_values))
-
-        # don't need to save model
-        # utils.save_model(
-        #     os.path.join(config["save_dir"], "model_{}.pth".format(mark)),
-        #     epoch,
-        #     model,
-        #     optimizer,
-        # )
+            early_stopping(best_value)
+            if early_stopping.early_stop:
+                print("Early stopping")
+                break
 
         # Learning rate scheduling
-        if epoch == config.lr_step[lr_step]:
-            utils.save_model(
-                os.path.join(config.save_dir, "model_{}.pth".format(epoch)),
-                epoch,
-                model,
-                optimizer,
-            )
-            lr = lr * config.lr_factor[lr_step]
-            if (
-                lr_step < len(config.lr_step) - 1
-            ):  # so that this index does not get out of bounds
-                lr_step += 1
-            logger.info("Learning rate updated to: ", lr)
-            for param_group in optimizer.param_groups:
-                param_group["lr"] = lr
+        if args.cos:
+            scheduler.step()
+            print("lr = {:.10f}".format(optimizer.param_groups[0]["lr"]))
+        else:
+            adjust_learning_rate(optimizer, epoch + 1, args)
+
+
+    # testing
+    model.load_state_dict(torch.load(os.path.join(config.save_dir, "model_best.pth")))
+    test_evaluator = runner_class(
+        model,
+        test_loader,
+        device,
+        loss_module,
+        config,
+        accelerator=accelerator,
+        print_interval=config.print_interval,
+        console=config.console,
+    )
+    aggr_metrics_test = test(test_evaluator)
 
     # Export evolution of metrics over epochs
     header = metrics_names
@@ -226,12 +223,13 @@ def main(config):
     )
 
     # Export record metrics to a file accumulating records from all experiments
-    utils.register_record(
+    utils.register_test_record(
         config.records_file,
         config.initial_timestamp,
         config.experiment_name,
         best_metrics,
         aggr_metrics_val,
+        aggr_metrics_test,
         comment=config.comment,
     )
 
@@ -253,7 +251,6 @@ def main(config):
 
 
 if __name__ == "__main__":
-
     logging.basicConfig(
         format="%(asctime)s | %(levelname)s : %(message)s", level=logging.INFO
     )
@@ -262,4 +259,6 @@ if __name__ == "__main__":
 
     args = Options().parse()  # `argparse` object
     config = setup(args)
-    main(config)
+    for ii in range(config.itr):
+        config.comment += f" itr{ii}"
+        main(config)

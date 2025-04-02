@@ -155,6 +155,7 @@ class ForecastingSupervisedRunner(BaseRunner):
         total_samples = 0  # total samples in epoch
 
         for i, batch in enumerate(self.dataloader):
+            self.optimizer.zero_grad()
 
             X, targets, x_mask, y_mask = batch
             targets = targets.to(self.device)
@@ -164,35 +165,25 @@ class ForecastingSupervisedRunner(BaseRunner):
             predictions = predictions[:, -self.config.pred_len :, f_dim:]
             targets = targets[:, -self.config.pred_len :, f_dim:]
 
-            loss = self.loss_module(
-                predictions, targets
-            )  # (batch_size,) loss for each sample in the batch
+            loss = self.loss_module(predictions, targets)
             batch_loss = torch.sum(loss)
-            mean_loss = batch_loss / len(
-                loss
-            )  # mean loss (over samples) used for optimization
-
-            if self.l2_reg:
-                total_loss = mean_loss + self.l2_reg * l2_reg_loss(self.model)
-            else:
-                total_loss = mean_loss
+            mean_loss = batch_loss / len(loss)  # mean loss (over samples)
 
             # Zero gradients, perform a backward pass, and update the weights.
-            self.accelerator.backward(total_loss)  # for mixed precision training
+            self.accelerator.backward(loss)  # for mixed precision training
 
             # torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
+            # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
             self.optimizer.step()
-            self.optimizer.zero_grad()
 
-            metrics = {"loss": mean_loss.item()}
+            metrics = {"loss": loss.item()}
             if i % self.print_interval == 0:
                 ending = "" if epoch_num is None else "Epoch {} ".format(epoch_num)
                 self.print_callback(i, metrics, prefix="Training " + ending)
 
             with torch.no_grad():
                 total_samples += len(loss)
-                epoch_loss += batch_loss.item()  # add total loss of batch
+                epoch_loss += loss.item()  # add total loss of batch
 
         epoch_loss = (
             epoch_loss / total_samples
@@ -225,28 +216,29 @@ class ForecastingSupervisedRunner(BaseRunner):
             predictions = predictions[:, -self.config.pred_len :, f_dim:]
             targets = targets[:, -self.config.pred_len :, f_dim:]
 
-            mse_loss = self.loss_module(
-                predictions, targets
-            )  # (batch_size,) loss for each sample in the batch
-            mae_loss = self.mae_criterion(predictions, targets)
-
-            batch_mse_loss = torch.sum(mse_loss).cpu().item()
+            mse_loss = self.loss_module(predictions, targets)
+            batch_mse_loss = torch.sum(mse_loss)
             mean_mse_loss = batch_mse_loss / len(mse_loss)  # mean loss (over samples)
-            batch_mae_loss = torch.sum(mae_loss).cpu().item()
-            mean_mae_loss = batch_mae_loss / len(mae_loss)  # mean loss (over samples)
+            # (batch_size,) loss for each sample in the batch
+            mae_loss = self.mae_criterion(predictions, targets)
+            batch_mae_loss = torch.sum(mae_loss)
+            mean_mae_loss = batch_mae_loss / len(mae_loss)
 
             per_batch["targets"].append(targets.cpu().numpy())
             per_batch["predictions"].append(predictions.cpu().numpy())
             per_batch["metrics"].append([mse_loss.cpu().numpy()])
 
-            metrics = {"mse_loss": mean_mse_loss, "mae_loss": mean_mae_loss}
+            metrics = {
+                "mse_loss": mean_mse_loss,
+                "mae_loss": mean_mae_loss,
+            }
             if i % self.print_interval == 0:
                 ending = "" if epoch_num is None else "Epoch {} ".format(epoch_num)
                 self.print_callback(i, metrics, prefix="Evaluating " + ending)
 
             total_samples += len(mse_loss)
-            epoch_mse_loss += batch_mse_loss  # add total loss of batch
-            epoch_mae_loss += batch_mae_loss
+            epoch_mse_loss += batch_mse_loss.cpu().item()  # add total loss of batch
+            epoch_mae_loss += batch_mae_loss.cpu().item()
 
         epoch_mse_loss = (
             epoch_mse_loss / total_samples
@@ -477,6 +469,44 @@ def validate(
         np.savez(pred_filepath, **per_batch)
 
     return aggr_metrics, best_metrics, best_value
+
+
+def test(test_evaluator, config):
+    """Run an evaluation on the validation set while logging metrics, and handle outcome"""
+
+    logger.info("Testing on test set ...")
+    eval_start_time = time.time()
+    with torch.no_grad():
+        aggr_metrics, per_batch = test_evaluator.evaluate(keep_all=False)
+    aggr_metrics = {f"test_{key}": value for key, value in aggr_metrics.items()}
+    eval_runtime = time.time() - eval_start_time
+    logger.info(
+        "Testing runtime: {} hours, {} minutes, {} seconds\n".format(
+            *utils.readable_time(eval_runtime)
+        )
+    )
+
+    global val_times
+    val_times["total_time"] += eval_runtime
+    val_times["count"] += 1
+    avg_val_time = val_times["total_time"] / val_times["count"]
+    avg_val_batch_time = avg_val_time / len(test_evaluator.dataloader)
+    avg_val_sample_time = avg_val_time / len(test_evaluator.dataloader.dataset)
+    logger.info(
+        "Avg val. time: {} hours, {} minutes, {} seconds".format(
+            *utils.readable_time(avg_val_time)
+        )
+    )
+    logger.info("Avg batch test. time: {} seconds".format(avg_val_batch_time))
+    logger.info("Avg sample test. time: {} seconds".format(avg_val_sample_time))
+
+    print()
+    print_str = "Epoch Testing Summary: "
+    for k, v in aggr_metrics.items():
+        print_str += "{}: {:8f} | ".format(k, v)
+    logger.info(print_str)
+
+    return aggr_metrics
 
 
 def check_progress(epoch):
