@@ -1,10 +1,4 @@
 import logging
-
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s : %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-logger.info("Loading packages ...")
 import os
 import sys
 import time
@@ -33,18 +27,18 @@ def main(config):
     accelerator = Accelerator()
 
     # add file logging besides stdout
-    file_handler = logging.FileHandler(os.path.join(config["output_dir"], "output.log"))
+    file_handler = logging.FileHandler(os.path.join(config.output_dir, "output.log"))
     logger.addHandler(file_handler)
 
     logger.info(f"Running:\n{' '.join(sys.argv)}\n")
 
-    if config["seed"] is not None:
-        random.seed(config["seed"])
-        torch.manual_seed(config["seed"])
-        np.random.seed(config["seed"])
+    if config.seed is not None:
+        random.seed(config.seed)
+        torch.manual_seed(config.seed)
+        np.random.seed(config.seed)
 
     device = torch.device(
-        "cuda" if (torch.cuda.is_available() and config["gpu"] != -1) else "cpu"
+        "cuda" if (torch.cuda.is_available() and config.gpu != -1) else "cpu"
     )
     logger.info(f"Using device: {device}")
     if device == "cuda":
@@ -59,7 +53,7 @@ def main(config):
     # Create model
 
     logger.info("Creating model ...")
-    model_class = model_factory[config["model_name"]]
+    model_class = model_factory[config.model_name]
     model = model_class(config, device)
 
     logger.info(f"Model:\n{model}")
@@ -71,20 +65,11 @@ def main(config):
     train_steps = len(train_loader)
 
     # initialize the optimizer
-    if config["global_reg"]:
-        weight_decay = config["l2_reg"]
-        output_reg = None
-    else:
-        weight_decay = 0
-        output_reg = config["l2_reg"]
-
-    optim_class = get_optimizer(config["optimizer"])
-    optimizer = optim_class(
-        model.parameters(), lr=config["lr"], weight_decay=weight_decay
-    )
+    optim_class = get_optimizer(config.optimizer)
+    optimizer = optim_class(model.parameters(), lr=config.lr)
 
     # initialize the scheduler
-    if config["lradj"] == "COS":
+    if config.lradj == "COS":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=20, eta_min=1e-8
         )
@@ -92,9 +77,9 @@ def main(config):
         scheduler = lr_scheduler.OneCycleLR(
             optimizer=optimizer,
             steps_per_epoch=train_steps,
-            pct_start=config["pct_start"],
-            epochs=config["train_epochs"],
-            max_lr=config["lr"],
+            pct_start=config.pct_start,
+            epochs=config.epochs,
+            max_lr=config.lr,
         )
 
     train_loader, val_loader, test_loader, model, optimizer, scheduler = (
@@ -105,7 +90,7 @@ def main(config):
 
     start_epoch = 0
     lr_step = 0  # current step index of `lr_step`
-    lr = config["lr"]  # current learning step
+    lr = config.lr  # current learning step
 
     loss_module = get_loss_module(config)
 
@@ -117,26 +102,27 @@ def main(config):
         train_loader,
         device,
         loss_module,
-        optimizer,
-        accelerator,
-        l2_reg=output_reg,
-        print_interval=config["print_interval"],
-        console=config["console"],
+        config,
+        optimizer=optimizer,
+        accelerator=accelerator,
+        print_interval=config.print_interval,
+        console=config.console,
     )
     val_evaluator = runner_class(
         model,
         val_loader,
         device,
         loss_module,
+        config,
         accelerator=accelerator,
-        print_interval=config["print_interval"],
-        console=config["console"],
+        print_interval=config.print_interval,
+        console=config.console,
     )
 
-    tensorboard_writer = SummaryWriter(config["tensorboard_dir"])
+    tensorboard_writer = SummaryWriter(config.tensorboard_dir)
 
     best_value = (
-        1e16 if config["key_metric"] in NEG_METRICS else -1e16
+        1e16 if config.key_metric in NEG_METRICS else -1e16
     )  # initialize with +inf or -inf depending on key metric
     metrics = (
         []
@@ -153,7 +139,7 @@ def main(config):
     logger.info("Starting training...")
 
     for epoch in tqdm(
-        range(start_epoch + 1, config["epochs"] + 1),
+        range(start_epoch + 1, config.epochs + 1),
         desc="Training Epoch",
         leave=False,
     ):
@@ -190,9 +176,9 @@ def main(config):
 
         # evaluate if first or last epoch or at specified interval
         if (
-            (epoch == config["epochs"])
+            (epoch == config.epochs)
             or (epoch == start_epoch + 1)
-            or (epoch % config["val_interval"] == 0)
+            or (epoch % config.val_interval == 0)
         ):
             aggr_metrics_val, best_metrics, best_value = validate(
                 val_evaluator,
@@ -214,16 +200,16 @@ def main(config):
         # )
 
         # Learning rate scheduling
-        if epoch == config["lr_step"][lr_step]:
+        if epoch == config.lr_step[lr_step]:
             utils.save_model(
-                os.path.join(config["save_dir"], "model_{}.pth".format(epoch)),
+                os.path.join(config.save_dir, "model_{}.pth".format(epoch)),
                 epoch,
                 model,
                 optimizer,
             )
-            lr = lr * config["lr_factor"][lr_step]
+            lr = lr * config.lr_factor[lr_step]
             if (
-                lr_step < len(config["lr_step"]) - 1
+                lr_step < len(config.lr_step) - 1
             ):  # so that this index does not get out of bounds
                 lr_step += 1
             logger.info("Learning rate updated to: ", lr)
@@ -233,7 +219,7 @@ def main(config):
     # Export evolution of metrics over epochs
     header = metrics_names
     metrics_filepath = os.path.join(
-        config["output_dir"], "metrics_" + config["experiment_name"] + ".xls"
+        config.output_dir, "metrics_" + config.experiment_name + ".xls"
     )
     book = utils.export_performance_metrics(
         metrics_filepath, metrics, header, sheet_name="metrics"
@@ -241,17 +227,17 @@ def main(config):
 
     # Export record metrics to a file accumulating records from all experiments
     utils.register_record(
-        config["records_file"],
-        config["initial_timestamp"],
-        config["experiment_name"],
+        config.records_file,
+        config.initial_timestamp,
+        config.experiment_name,
         best_metrics,
         aggr_metrics_val,
-        comment=config["comment"],
+        comment=config.comment,
     )
 
     logger.info(
         "Best {} was {}. Other metrics: {}".format(
-            config["key_metric"], best_value, best_metrics
+            config.key_metric, best_value, best_metrics
         )
     )
     logger.info("All Done!")
@@ -267,6 +253,12 @@ def main(config):
 
 
 if __name__ == "__main__":
+
+    logging.basicConfig(
+        format="%(asctime)s | %(levelname)s : %(message)s", level=logging.INFO
+    )
+    logger = logging.getLogger(__name__)
+    logger.info("Loading packages ...")
 
     args = Options().parse()  # `argparse` object
     config = setup(args)

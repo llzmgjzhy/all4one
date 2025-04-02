@@ -10,7 +10,7 @@ class Options(object):
             description="Run a complete training pipeline. Optionally, a JSON configuration file can be used, to overwrite command-line arguments."
         )
 
-        # Run from config file
+        # basic config
         self.parser.add_argument(
             "--task",
             choices={
@@ -29,21 +29,11 @@ class Options(object):
                 "                          forecasting of future values"
             ),
         )
-
-        # GPT4TS
-        self.parser.add_argument(
-            "--patch_size", type=int, default=64, help="patch_size"
-        )
-        self.parser.add_argument("--stride", type=int, default=64, help="stride")
-
-        # Run from command-line arguments
-        # I/O
         self.parser.add_argument(
             "--output_dir",
             default="./output",
             help="Root output directory. Must exist. Time-stamped directories will be created inside.",
         )
-        self.parser.add_argument("--data_dir", default="./data", help="Data directory")
         self.parser.add_argument(
             "--name",
             dest="experiment_name",
@@ -66,6 +56,54 @@ class Options(object):
             default="./records.xls",
             help="Excel file keeping all records of experiments",
         )
+
+        # data loader
+        self.parser.add_argument(
+            "--root_path",
+            type=str,
+            default="./dataset",
+            help="root path of the data file",
+        )
+        self.parser.add_argument(
+            "--data_path", type=str, default="ETTh1.csv", help="data file"
+        )
+        self.parser.add_argument(
+            "--data", type=str, required=True, default="ETTm1", help="dataset type"
+        )
+        self.parser.add_argument(
+            "--features",
+            type=str,
+            default="M",
+            help="forecasting task, options:[M, S, MS]; "
+            "M:multivariate predict multivariate, S: univariate predict univariate, "
+            "MS:multivariate predict univariate",
+        )
+        self.parser.add_argument(
+            "--freq",
+            type=str,
+            default="h",
+            help="freq for time features encoding, "
+            "options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], "
+            "you can also use more detailed freq like 15min or 3h",
+        )
+        self.parser.add_argument(
+            "--target", type=str, default="OT", help="target feature in S or MS task"
+        )
+
+        # forecasting task
+        self.parser.add_argument(
+            "--seq_len", type=int, default=512, help="input sequence length"
+        )
+        self.parser.add_argument(
+            "--label_len", type=int, default=48, help="start token length"
+        )
+        self.parser.add_argument(
+            "--pred_len", type=int, default=96, help="prediction sequence length"
+        )
+        self.parser.add_argument(
+            "--seasonal_patterns", type=str, default="Monthly", help="subset for M4"
+        )
+
         # System
         self.parser.add_argument(
             "--console",
@@ -98,6 +136,7 @@ class Options(object):
             type=int,
             help="Seed used for splitting sets. None by default, set to an integer for reproducibility",
         )
+
         # Training process
         self.parser.add_argument(
             "--epochs", type=int, default=50, help="Number of training epochs"
@@ -138,14 +177,6 @@ class Options(object):
             "--batch_size", type=int, default=64, help="Training batch size"
         )
         self.parser.add_argument(
-            "--l2_reg", type=float, default=0, help="L2 weight regularization parameter"
-        )
-        self.parser.add_argument(
-            "--global_reg",
-            action="store_true",
-            help="If set, L2 regularization will be applied to all weights instead of only the output layer",
-        )
-        self.parser.add_argument(
             "--key_metric",
             choices={"loss", "accuracy", "precision", "mcc", "mse_loss"},
             default="loss",
@@ -156,8 +187,13 @@ class Options(object):
             action="store_true",
             help="If set, freezes all layer parameters except for the output layer. Also removes dropout except before the output layer",
         )
+        self.parser.add_argument(
+            "--lradj", type=str, default="type1", help="adjust learning rate"
+        )
 
         # Model
+        self.parser.add_argument("--is_gpt", type=int, default=1)
+        self.parser.add_argument("--pretrain", type=int, default=1)
         self.parser.add_argument(
             "--model_name",
             default="GPT4TS",
@@ -169,6 +205,10 @@ class Options(object):
             help="""Maximum input sequence length. Determines size of transformer layers.
                                  If not provided, then the value defined inside the data class will be used.""",
         )
+        self.parser.add_argument(
+            "--patch_size", type=int, default=64, help="patch_size"
+        )
+        self.parser.add_argument("--stride", type=int, default=64, help="stride")
         self.parser.add_argument(
             "--d_model",
             type=int,
@@ -224,6 +264,12 @@ class Options(object):
             help="dimension of fcn",
         )
         self.parser.add_argument(
+            "--embed",
+            type=str,
+            default="timeF",
+            help="time features encoding, options:[timeF, fixed, learned]",
+        )
+        self.parser.add_argument(
             "--llm_dim", type=int, default="768", help="LLM model dimension"
         )  # LLama7b:4096; GPT2-small:768; BERT-base:768
         self.parser.add_argument(
@@ -239,8 +285,12 @@ class Options(object):
         self.parser.add_argument(
             "--dec_in", type=int, default=7, help="decoder input size"
         )
+        self.parser.add_argument(
+            "--pct_start", type=float, default=0.2, help="pct_start"
+        )
         self.parser.add_argument("--c_out", type=int, default=7, help="output size")
         self.parser.add_argument("--llm_layers", type=int, default=6)
+        self.parser.add_argument("--percent", type=int, default=100)
 
     def parse(self):
 
