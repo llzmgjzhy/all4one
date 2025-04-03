@@ -123,3 +123,53 @@ def torch_pad_nan(arr, left=0, right=0, dim=0):
             (arr, torch.full(padshape, float("nan"), device=device)), dim=dim
         )
     return arr
+
+
+def tensor_line_plots(data, height=256, width=256):
+    """
+    Efficiently generate line graph tensors (supporting GPU and gradient)
+    Args:
+        data: [B, T, N] input tensor, B is batch size, T is time length, N is number of dims.Input tensor has been normalized.
+    Returns:
+        images: [b, height, width]
+    """
+
+    B, seq_len, _ = data.shape
+    device = data.device
+    y = data.squeeze()  # [B, T, N] -> [B, T] if N =1
+
+    # genarate x axis (Uniformly distributed to the width)
+    x = torch.linspace(0, width - 1, seq_len, device=device).expand(
+        B, seq_len
+    )  # [B, T]
+
+    # initialize image template
+    images = torch.zeros(B, height, width, device=device)
+
+    # turn axis into int index
+    x_idx = x.round().long().clamp(0, width - 1)  # [B, T]
+    y_idx = y.round().long().clamp(0, height - 1)  # [B, T]
+
+    # batch assignment (directly light up corresponding pixels)
+    batch_indices = torch.arange(B, device=device)[:, None].expand(
+        -1, seq_len
+    )  # [B, T]
+    images[batch_indices, y_idx, x_idx] = 1.0  # [B, height, width]
+
+    # Create a horizontal Gaussian blur kernel (connecting adjacent points)
+    kernel_size = 7
+    sigma = 1.0
+    ax = torch.arange(kernel_size, device=device) - kernel_size // 2
+    gauss = torch.exp(-(ax**2) / (2 * sigma**2))
+    kernel = gauss / gauss.sum()
+
+    # apply horizontal convolution
+    images = images.unsqueeze(1)  # [B, 1, height, width]
+    images = F.conv2d(
+        images,
+        kernel.view(1, 1, 1, kernel_size),
+        padding=(0, kernel_size // 2),
+        groups=1,
+    )  # [B, 1, height, width]
+    images = images.expand(-1, 3, -1, -1)  # [B, 3, height, width]
+    return images  # [B, height, width]

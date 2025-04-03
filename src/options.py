@@ -280,7 +280,7 @@ class Options(object):
         )
         self.parser.add_argument(
             "--llm_dim", type=int, default="768", help="LLM model dimension"
-        )  # LLama7b:4096; GPT2-small:768; BERT-base:768
+        )  # LLama7b:4096; GPT2-small:768; BERT-base:768; Qwen_2_5_VL:3584
         self.parser.add_argument(
             "--prompt_domain",
             type=int,
@@ -300,6 +300,17 @@ class Options(object):
         self.parser.add_argument("--c_out", type=int, default=7, help="output size")
         self.parser.add_argument("--llm_layers", type=int, default=6)
         self.parser.add_argument("--percent", type=int, default=100)
+
+        # image modality
+        self.parser.add_argument(
+            "--img_width", type=int, default=256, help="the width of time series image"
+        )
+        self.parser.add_argument(
+            "--img_height",
+            type=int,
+            default=256,
+            help="the height of time series image",
+        )
 
     def parse(self):
 

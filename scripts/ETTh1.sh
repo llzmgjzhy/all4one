@@ -23,24 +23,26 @@ python ./src/main_long_forecast.py \
     --seq_len $seq_len \
     --label_len 168 \
     --pred_len $pred_len \
-    --batch_size 256 \
+    --batch_size 24 \
     --lradj 'COS' \
     --lr $lr \
-    --epochs 10 \
+    --epochs 20 \
     --d_model 768 \
     --n_heads 4 \
     --d_ff 768 \
-    --dropout 0.3 \
+    --dropout 0 \
     --enc_in 7 \
     --c_out 7 \
     --freq h \
+    --img_width 256 \
+    --img_height 256 \
     --patch_size 16 \
     --stride 8 \
     --percent $percent \
     --llm_layer 6 \
+    --llm_dim 3584 \
     --itr 1 \
     --model $model \
-    --is_gpt 1 \
     --loss mse \
     --key_metric mse_loss \
     # --no_savemodel 
