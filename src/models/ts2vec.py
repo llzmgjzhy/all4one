@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from models.model import TSEncoder
-from utils import (
+from models.util import (
     split_with_nan,
     centerize_vary_length_series,
     take_per_row,
@@ -11,7 +11,7 @@ from utils import (
 from models.loss import hierarchical_contrastive_loss
 
 
-class TS2Vec:
+class TS2Vec(torch.nn.Module):
     """The TS2Vec model"""
 
     def __init__(
@@ -75,24 +75,27 @@ class TS2Vec:
         if self.max_train_length is not None:
             sections = train_data.shape[1] // self.max_train_length
             if sections >= 2:
-                train_data = np.concatenate(
-                    split_with_nan(train_data, sections, axis=1), axis=0
-                )
+                split_tensors = torch.tensor_split(train_data, sections, dim=1)
+                train_data = torch.cat(split_tensors, dim=0)
 
-        temporal_missing = np.isnan(train_data).all(axis=-1).any(axis=0)
+        nan_mask = torch.isnan(train_data)
+        all_nan_last_dim = nan_mask.all(dim=-1)
+        temporal_missing = all_nan_last_dim.any(dim=0)
         if temporal_missing[0] or temporal_missing[-1]:
             train_data = centerize_vary_length_series(train_data)
 
-        train_data = train_data[~np.isnan(train_data).all(axis=2).all(axis=1)]
+        train_data = train_data[~torch.isnan(train_data).all(dim=2).all(dim=1)]
 
         ts_l = train_data.shape[1]
-        crop_l = np.random.randint(low=2 ** (self.temporal_unit + 1), high=ts_l + 1)
-        crop_left = np.random.randint(ts_l - crop_l + 1)
+        crop_l = torch.randint(
+            low=2 ** (self.temporal_unit + 1), high=ts_l + 1, size=(1,)
+        ).item()
+        crop_left = torch.randint(ts_l - crop_l + 1, size=(1,)).item()
         crop_right = crop_left + crop_l
-        crop_eleft = np.random.randint(crop_left + 1)
-        crop_eright = np.random.randint(low=crop_right, high=ts_l + 1)
-        crop_offset = np.random.randint(
-            low=-crop_eleft, high=ts_l - crop_eright + 1, size=train_data.size(0)
+        crop_eleft = torch.randint(crop_left + 1, size=(1,)).item()
+        crop_eright = torch.randint(low=crop_right, high=ts_l + 1, size=(1,)).item()
+        crop_offset = torch.randint(
+            low=-crop_eleft, high=ts_l - crop_eright + 1, size=(train_data.size(0),)
         )
 
         out1 = self._net(
@@ -153,7 +156,7 @@ class TS2Vec:
             if slicing is not None:
                 out = out[:, slicing]
 
-        return out.cpu()
+        return out
 
     def encode(
         self,

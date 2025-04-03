@@ -56,6 +56,11 @@ class Options(object):
             default="./records.xlsx",
             help="Excel file keeping all records of experiments",
         )
+        self.parser.add_argument(
+            "--no_savemodel",
+            action="store_true",
+            help="If set, a model state dict will be saved",
+        )
 
         # data loader
         self.parser.add_argument(

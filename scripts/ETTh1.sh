@@ -2,18 +2,18 @@
 export CUDA_VISIBLE_DEVICES=0
 
 seq_len=336
-model=GPT4TS
+model=ALL4ONE
 
 for percent in 100
 do
 for pred_len in 96
 do
-for lr in 0.0001
+for lr in 0.001
 do
 
 python ./src/main_long_forecast.py \
     --task forecast \
-    --comment "forecasting using gpt2" \
+    --comment "forecasting using $model" \
     --name "longForecasting_ETTh1" \
     --root_path ./src/datasets/ETT-small/ \
     --data_path ETTh1.csv \
@@ -38,12 +38,12 @@ python ./src/main_long_forecast.py \
     --stride 8 \
     --percent $percent \
     --llm_layer 6 \
-    --itr 3 \
+    --itr 1 \
     --model $model \
     --is_gpt 1 \
     --loss mse \
-    --key_metric mse_loss
-
+    --key_metric mse_loss \
+    # --no_savemodel 
 done
 done
 done

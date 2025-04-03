@@ -156,19 +156,27 @@ class ForecastingSupervisedRunner(BaseRunner):
             self.optimizer.zero_grad()
 
             X, targets, x_mask, y_mask = batch
-            targets = targets.to(self.device)
-            predictions = self.model(X.to(self.device), x_mask, targets, y_mask)
+            X = X.float().to(self.accelerator.device)
+            targets = targets.float().to(self.accelerator.device)
+            predictions = self.model(X, x_mask, targets, y_mask)
 
             f_dim = -1 if self.config.features == "MS" else 0
             predictions = predictions[:, -self.config.pred_len :, f_dim:]
             targets = targets[:, -self.config.pred_len :, f_dim:]
 
-            loss = self.loss_module(predictions, targets)
-            batch_loss = loss.sum()
-            mean_loss = loss.mean()  # mean loss (over samples)
+            if self.config.model_name == "ALL4ONE":
+                ts2vec_loss = self.model.get_ts2vec_loss(X)
+                loss = self.loss_module(predictions, targets)
+                batch_loss = loss.sum()
+                mean_loss = loss.mean()
+            else:
+                loss = self.loss_module(predictions, targets)
+                batch_loss = loss.sum()
+                mean_loss = loss.mean()  # mean loss (over samples)
 
             # Zero gradients, perform a backward pass, and update the weights.
-            self.accelerator.backward(mean_loss)  # for mixed precision training
+            backward_loss = mean_loss if self.config.model_name != "ALL4ONE" else ts2vec_loss + mean_loss
+            self.accelerator.backward(backward_loss)  # for mixed precision training
 
             # torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)
             # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
@@ -207,8 +215,9 @@ class ForecastingSupervisedRunner(BaseRunner):
         for i, batch in enumerate(self.dataloader):
 
             X, targets, x_mask, y_mask = batch
-            targets = targets.to(self.device)
-            predictions = self.model(X.to(self.device), x_mask, targets, y_mask)
+            X = X.float().to(self.accelerator.device)
+            targets = targets.float().to(self.accelerator.device)
+            predictions = self.model(X, x_mask, targets, y_mask)
 
             f_dim = -1 if self.config.features == "MS" else 0
             predictions = predictions[:, -self.config.pred_len :, f_dim:]
@@ -452,11 +461,12 @@ def validate(
         condition = aggr_metrics[config.key_metric] > best_value
     if condition:
         best_value = aggr_metrics[config.key_metric]
-        utils.save_model(
-            os.path.join(config.save_dir, "model_best.pth"),
-            epoch,
-            val_evaluator.model,
-        )
+        if not config.no_savemodel:
+            utils.save_model(
+                os.path.join(config.save_dir, "model_best.pth"),
+                epoch,
+                val_evaluator.model,
+            )
         best_metrics = aggr_metrics.copy()
 
         pred_filepath = os.path.join(config.pred_dir, "best_predictions")
@@ -475,7 +485,7 @@ def test(test_evaluator):
     logger.info("Testing on test set ...")
     eval_start_time = time.time()
     with torch.no_grad():
-        aggr_metrics, per_batch = test_evaluator.evaluate(epoch_num=None,keep_all=True)
+        aggr_metrics, per_batch = test_evaluator.evaluate(epoch_num=None, keep_all=True)
         del aggr_metrics["epoch"]
     aggr_metrics = {f"test_{key}": value for key, value in aggr_metrics.items()}
     eval_runtime = time.time() - eval_start_time

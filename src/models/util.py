@@ -65,6 +65,7 @@ class DilatedConvEncoder(nn.Module):
                 for i in range(len(channels))
             ]
         )
+        self.net.__class__.__name__ = "DilatedConvEncoder"
 
     def forward(self, x):
         return self.net(x)
@@ -106,13 +107,19 @@ def take_per_row(A, indx, num_elem):
     all_indx = indx[:, None] + np.arange(num_elem)
     return A[torch.arange(all_indx.shape[0])[:, None], all_indx]
 
+
 def torch_pad_nan(arr, left=0, right=0, dim=0):
+    device = arr.device
     if left > 0:
         padshape = list(arr.shape)
         padshape[dim] = left
-        arr = torch.cat((torch.full(padshape, np.nan), arr), dim=dim)
+        arr = torch.cat(
+            (torch.full(padshape, float("nan"), device=device), arr), dim=dim
+        )
     if right > 0:
         padshape = list(arr.shape)
         padshape[dim] = right
-        arr = torch.cat((arr, torch.full(padshape, np.nan)), dim=dim)
+        arr = torch.cat(
+            (arr, torch.full(padshape, float("nan"), device=device)), dim=dim
+        )
     return arr

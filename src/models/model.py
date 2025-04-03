@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers.models.gpt2.modeling_gpt2 import GPT2Model
+from transformers import GPT2Model
 from einops import rearrange
 from models.embed import DataEmbedding, DataReduction
 import numpy as np
@@ -212,5 +212,10 @@ class TSEncoder(nn.Module):
 
         return x
 
+    def __repr__(self):
+        num_blocks = len(self.feature_extractor.net)
+        main_str = (
+            f" TSEncoder(\n (input_fc): Linear(input_dims={self.input_dims}, out_dims={self.output_dims})\n (feature_extractor): DilatedConvEncoder(num_blocks={num_blocks})\n)"
+        )
 
-model_factory = {"GPT2": GPT2forVSB, "GPT4TS": GPT4TS}
+        return main_str

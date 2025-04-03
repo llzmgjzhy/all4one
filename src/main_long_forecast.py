@@ -16,7 +16,7 @@ from options import Options
 from running import setup, pipeline_factory, validate, test, NEG_METRICS
 from utils import utils
 from optimizers import get_optimizer
-from models.model import model_factory
+from models import model_factory
 from models.loss import get_loss_module
 from datasets.data_factory import data_provider
 from utils.tools import EarlyStopping, adjust_learning_rate
@@ -258,8 +258,8 @@ if __name__ == "__main__":
 
     args = Options().parse()  # `argparse` object
     origin_comment = args.comment
-    args_itr = copy.deepcopy(args)  # prevent itr forloop to change output_dir
     for ii in range(args.itr):
+        args_itr = copy.deepcopy(args)  # prevent itr forloop to change output_dir
         config = setup(args_itr)  # save expriment files itr times
         config.comment = origin_comment + f" itr{ii}"
         main(config)

@@ -10,7 +10,10 @@ temp.py
 # datasets
 *.parquet
 *.csv
-*.xls
+*.xlsx
 
 # vscode file
 .vscode/
+
+# huggingface model state
+src/models/huggingface_hub/
