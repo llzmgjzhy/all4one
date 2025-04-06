@@ -23,10 +23,10 @@ python ./src/main_long_forecast.py \
     --seq_len $seq_len \
     --label_len 168 \
     --pred_len $pred_len \
-    --batch_size 24 \
+    --batch_size 48 \
     --lradj 'COS' \
     --lr $lr \
-    --epochs 20 \
+    --epochs 10 \
     --d_model 768 \
     --n_heads 4 \
     --d_ff 768 \

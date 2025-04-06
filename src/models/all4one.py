@@ -22,7 +22,8 @@ class FlattenHead(nn.Module):
     def __init__(self, seq_window, head_dropout=0):
         super().__init__()
         self.flatten = nn.Flatten(start_dim=-2)
-        self.linear = nn.LazyLinear(out_features=seq_window)
+        self.linear = nn.Linear(in_features=82 * 3584, out_features=seq_window)
+        # self.linear = nn.Linear(in_features=1 * 3584, out_features=seq_window)
         self.dropout = nn.Dropout(head_dropout)
 
     def forward(self, x):
@@ -45,7 +46,7 @@ class ALL4ONE(nn.Module):
         # model
         self.llm_model = Qwen2_5_VLModel.from_pretrained(
             "Qwen/Qwen2.5-VL-7B-Instruct",
-            output_attentions=True,
+            output_attentions=False,
             output_hidden_states=True,
         )
         for param in self.llm_model.parameters():
@@ -88,6 +89,7 @@ class ALL4ONE(nn.Module):
         images_embeds = self.visual(
             image_inputs["pixel_values"], grid_thw=image_inputs["image_grid_thw"]
         )
+        images_embeds = images_embeds.reshape(B, -1, images_embeds.shape[-1])
 
         x_enc = self.normalize_layers(x_enc, "norm")
         # time series embedding
@@ -103,11 +105,10 @@ class ALL4ONE(nn.Module):
         llm_enc_out = torch.cat(
             [images_embeds, x_enc], dim=1
         )  # [B, token_num , llm_dim]
-        num_tokens = llm_enc_out.shape[1]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
 
         # output
-        dec_out = self.output_projection(x_enc)  # [B, pred_len, 1]
-        dec_out = self.normalize_layers(x_enc, "denorm")
+        dec_out = self.output_projection(dec_out)  # [B, pred_len, 1]
+        dec_out = self.normalize_layers(dec_out, "denorm")
 
         return dec_out
