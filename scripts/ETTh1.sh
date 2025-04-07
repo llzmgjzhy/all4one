@@ -1,8 +1,9 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-seq_len=336
+seq_len=512
 model=ALL4ONE
+batch_size=128
 
 for percent in 100
 do
@@ -23,7 +24,7 @@ python ./src/main_long_forecast.py \
     --seq_len $seq_len \
     --label_len 168 \
     --pred_len $pred_len \
-    --batch_size 48 \
+    --batch_size $batch_size \
     --lradj 'COS' \
     --lr $lr \
     --epochs 10 \

@@ -2,14 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import (
-    Qwen2_5_VLModel,
-    Qwen2_5_VLConfig,
     Qwen2VLImageProcessorFast,
+    Qwen2_5_VLForConditionalGeneration,
 )
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-    Qwen2_5_VisionTransformerPretrainedModel,
-)
-import numpy as np
 from einops import rearrange
 from models.ts2vec import TS2Vec
 from math import sqrt
@@ -44,34 +39,34 @@ class ALL4ONE(nn.Module):
         self.d_llm = config.llm_dim
 
         # model
-        self.llm_model = Qwen2_5_VLModel.from_pretrained(
+        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             "Qwen/Qwen2.5-VL-7B-Instruct",
-            output_attentions=False,
-            output_hidden_states=True,
+            attn_implementation="flash_attention_2",
+            torch_dtype=torch.bfloat16,
         )
-        for param in self.llm_model.parameters():
+        for param in self.model.parameters():
             param.requires_grad = False
+        self.llm_model = self.model.model
 
-        self.ts2vec = TS2Vec(config=config, input_dims=1, output_dims=1, device=device)
+        self.ts2vec = TS2Vec(
+            config=config, input_dims=1, output_dims=1, device=device
+        ).bfloat16()
 
         # visual module
-        qwen_2_5_vl_config = Qwen2_5_VLConfig()
-        self.visual = Qwen2_5_VisionTransformerPretrainedModel._from_config(
-            qwen_2_5_vl_config.vision_config
-        )
-        for param in self.visual.parameters():
-            param.requires_grad = False
+        self.visual = self.model.visual
         self.image_processor = Qwen2VLImageProcessorFast()
 
         # ts2vec embedding align llm input dims
-        self.ts2vec_embedding = nn.Linear(config.seq_len, config.llm_dim)
+        self.ts2vec_embedding = nn.Linear(config.seq_len, config.llm_dim).to(
+            dtype=torch.bfloat16, device=device
+        )
 
         # outprojection
         if config.task == "forecast":
             self.output_projection = FlattenHead(
                 seq_window=config.pred_len,
                 head_dropout=config.dropout,
-            )
+            ).to(dtype=torch.bfloat16, device=device)
 
         self.normalize_layers = Normalize(config.enc_in, affine=False)
 
@@ -85,7 +80,7 @@ class ALL4ONE(nn.Module):
         x_image = tensor_line_plots(x_enc)  # [B, 3, H, W]
         image_inputs = self.image_processor(
             images=x_image, videos=None, do_rescale=False
-        )
+        ).to(device=x_enc.device, dtype=x_enc.dtype)
         images_embeds = self.visual(
             image_inputs["pixel_values"], grid_thw=image_inputs["image_grid_thw"]
         )

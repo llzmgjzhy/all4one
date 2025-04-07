@@ -156,8 +156,8 @@ class ForecastingSupervisedRunner(BaseRunner):
             self.optimizer.zero_grad()
 
             X, targets, x_mask, y_mask = batch
-            X = X.float().to(self.accelerator.device)
-            targets = targets.float().to(self.accelerator.device)
+            X = X.to(device=self.device, dtype=torch.bfloat16)
+            targets = targets.to(device=self.device, dtype=torch.bfloat16)
             predictions = self.model(X, x_mask, targets, y_mask)
 
             f_dim = -1 if self.config.features == "MS" else 0
@@ -175,7 +175,11 @@ class ForecastingSupervisedRunner(BaseRunner):
                 mean_loss = loss.mean()  # mean loss (over samples)
 
             # Zero gradients, perform a backward pass, and update the weights.
-            backward_loss = mean_loss if self.config.model_name != "ALL4ONE" else ts2vec_loss + mean_loss
+            backward_loss = (
+                mean_loss
+                if self.config.model_name != "ALL4ONE"
+                else ts2vec_loss + mean_loss
+            )
             self.accelerator.backward(backward_loss)  # for mixed precision training
 
             # torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)
@@ -215,8 +219,8 @@ class ForecastingSupervisedRunner(BaseRunner):
         for i, batch in enumerate(self.dataloader):
 
             X, targets, x_mask, y_mask = batch
-            X = X.float().to(self.accelerator.device)
-            targets = targets.float().to(self.accelerator.device)
+            X = X.to(device=self.device, dtype=torch.bfloat16)
+            targets = targets.to(device=self.device, dtype=torch.bfloat16)
             predictions = self.model(X, x_mask, targets, y_mask)
 
             f_dim = -1 if self.config.features == "MS" else 0
@@ -231,9 +235,9 @@ class ForecastingSupervisedRunner(BaseRunner):
             batch_mae_loss = mae_loss.sum()
             mean_mae_loss = mae_loss.mean()
 
-            per_batch["targets"].append(targets.cpu().numpy())
-            per_batch["predictions"].append(predictions.cpu().numpy())
-            per_batch["metrics"].append([mse_loss.cpu().numpy()])
+            per_batch["targets"].append(targets.half().cpu().numpy())
+            per_batch["predictions"].append(predictions.half().cpu().numpy())
+            per_batch["metrics"].append([mse_loss.half().cpu().numpy()])
 
             metrics = {
                 "mse_loss": mean_mse_loss,
@@ -244,8 +248,8 @@ class ForecastingSupervisedRunner(BaseRunner):
                 self.print_callback(i, metrics, prefix="Evaluating " + ending)
 
             total_samples += mse_loss.numel()
-            epoch_mse_loss += batch_mse_loss.cpu().item()  # add total loss of batch
-            epoch_mae_loss += batch_mae_loss.cpu().item()
+            epoch_mse_loss += batch_mse_loss.half().cpu().item()  # add total loss of batch
+            epoch_mae_loss += batch_mae_loss.half().cpu().item()
 
         epoch_mse_loss = (
             epoch_mse_loss / total_samples
@@ -342,7 +346,7 @@ class SupervisedRunner(BaseRunner):
         for i, batch in enumerate(self.dataloader):
 
             X, targets, padding_masks, IDs = batch
-            targets = targets.to(self.device)
+            targets = targets.to(device=self.device, dtype=torch.bfloat16)
             padding_masks = padding_masks.to(self.device)  # 0s: ignore
             # regression: (batch_size, num_labels); classification: (batch_size, num_classes) of logits
             predictions = self.model(X.to(self.device), padding_masks)
