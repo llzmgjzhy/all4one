@@ -11,14 +11,14 @@ from math import sqrt
 from models.TimeLLM import ReprogrammingLayer
 from layers.StandardNorm import Normalize
 from models.util import tensor_line_plots
+import matplotlib.pyplot as plt
 
 
 class FlattenHead(nn.Module):
-    def __init__(self, seq_window, head_dropout=0):
+    def __init__(self, nf, seq_window, head_dropout=0):
         super().__init__()
         self.flatten = nn.Flatten(start_dim=-2)
-        self.linear = nn.Linear(in_features=82 * 3584, out_features=seq_window)
-        # self.linear = nn.Linear(in_features=1 * 3584, out_features=seq_window)
+        self.linear = nn.Linear(in_features=nf, out_features=seq_window)
         self.dropout = nn.Dropout(head_dropout)
 
     def forward(self, x):
@@ -37,6 +37,7 @@ class ALL4ONE(nn.Module):
         self.d_model = config.d_model
         self.d_ff = config.d_ff
         self.d_llm = config.llm_dim
+        self.output_dim = config.output_dim
 
         # model
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -49,7 +50,7 @@ class ALL4ONE(nn.Module):
         self.llm_model = self.model.model
 
         self.ts2vec = TS2Vec(
-            config=config, input_dims=1, output_dims=1, device=device
+            config=config, input_dims=1, output_dims=config.output_dim, device=device
         ).bfloat16()
 
         # visual module
@@ -64,6 +65,7 @@ class ALL4ONE(nn.Module):
         # outprojection
         if config.task == "forecast":
             self.output_projection = FlattenHead(
+                nf=self.d_ff * self.output_dim,
                 seq_window=config.pred_len,
                 head_dropout=config.dropout,
             ).to(dtype=torch.bfloat16, device=device)
@@ -101,6 +103,7 @@ class ALL4ONE(nn.Module):
             [images_embeds, x_enc], dim=1
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
+        dec_out = dec_out[:, -self.output_dim :, : self.d_ff]
 
         # output
         dec_out = self.output_projection(dec_out)  # [B, pred_len, 1]

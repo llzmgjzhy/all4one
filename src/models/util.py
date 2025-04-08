@@ -125,11 +125,12 @@ def torch_pad_nan(arr, left=0, right=0, dim=0):
     return arr
 
 
-def tensor_line_plots(data, height=256, width=256):
+def tensor_line_plots(data, height=256, width=256, flip=False):
     """
     Efficiently generate line graph tensors (supporting GPU and gradient)
     Args:
         data: [B, T, N] input tensor, B is batch size, T is time length, N is number of dims.Input tensor has been normalized.
+        flip: whether to flip the y axis
     Returns:
         images: [b, height, width]
     """
@@ -148,28 +149,54 @@ def tensor_line_plots(data, height=256, width=256):
 
     # turn axis into int index
     x_idx = x.round().long().clamp(0, width - 1)  # [B, T]
-    y_idx = y.round().long().clamp(0, height - 1)  # [B, T]
 
-    # batch assignment (directly light up corresponding pixels)
-    batch_indices = torch.arange(B, device=device)[:, None].expand(
-        -1, seq_len
-    )  # [B, T]
-    images[batch_indices, y_idx, x_idx] = 1.0  # [B, height, width]
+    y_min = y.min(dim=1, keepdim=True)[0]
+    y_max = y.max(dim=1, keepdim=True)[0]
+    y_norm = (y - y_min) / (y_max - y_min + 1e-8)
+    # if visualization is needed, set flip to True
+    if flip:
+        y_scaled = (1 - y_norm) * (height - 1)
+    else:
+        y_scaled = y_norm * (height - 1)
+    y_idx = y_scaled.round().long().clamp(0, height - 1)  # [B, T]
+    # y_idx = y.round().long().clamp(0, height - 1)  # [B, T]
 
-    # Create a horizontal Gaussian blur kernel (connecting adjacent points)
-    kernel_size = 7
-    sigma = 1.0
-    ax = torch.arange(kernel_size, device=device) - kernel_size // 2
-    gauss = torch.exp(-(ax**2) / (2 * sigma**2))
-    kernel = gauss / gauss.sum()
+    # plot scalars
+    x_start, x_end = x_idx[:, :-1], x_idx[:, 1:]  # [B, T-1]
+    y_start, y_end = y_idx[:, :-1], y_idx[:, 1:]
 
-    # apply horizontal convolution
+    # cal the variation of line segments in the x and y directions
+    dx = x_end - x_start
+    dy = y_end - y_start
+
+    # determine the number of steps for interpolation
+    line_lengths = torch.max(torch.abs(dx), torch.abs(dy))
+    max_length = line_lengths.max().item()
+    num_steps = max_length + 1 if max_length > 0 else 1  # handle zero-length lines
+
+    # generate interpolation param t
+    t = torch.linspace(0, 1, steps=num_steps, device=device)  # [num_steps]
+
+    # cal all points on the line segments
+    x_points = x_start.unsqueeze(-1) + dx.unsqueeze(-1) * t  # [B, T-1, num_steps]
+    y_points = y_start.unsqueeze(-1) + dy.unsqueeze(-1) * t
+
+    # round and clamp the coordinate range
+    x_rounded = x_points.round().long().clamp(0, width - 1)
+    y_rounded = y_points.round().long().clamp(0, height - 1)
+
+    # generate batch index and flatten coordinates
+    batch_indices = (
+        torch.arange(B, device=device)[:, None, None]
+        .expand(-1, dx.size(1), num_steps)
+        .flatten()
+    )
+    x_flat = x_rounded.flatten()
+    y_flat = y_rounded.flatten()
+
+    # set the pixel values to 1.0
+    images[batch_indices, y_flat, x_flat] = 1.0
+
     images = images.unsqueeze(1)  # [B, 1, height, width]
-    images = F.conv2d(
-        images,
-        kernel.view(1, 1, 1, kernel_size),
-        padding=(0, kernel_size // 2),
-        groups=1,
-    )  # [B, 1, height, width]
     images = images.expand(-1, 3, -1, -1)  # [B, 3, height, width]
-    return images  # [B, height, width]
+    return images  # [B, 1, height, width]

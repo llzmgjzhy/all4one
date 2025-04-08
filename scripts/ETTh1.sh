@@ -3,7 +3,8 @@ export CUDA_VISIBLE_DEVICES=0
 
 seq_len=512
 model=ALL4ONE
-batch_size=128
+batch_size=64
+epochs=10
 
 for percent in 100
 do
@@ -27,13 +28,14 @@ python ./src/main_long_forecast.py \
     --batch_size $batch_size \
     --lradj 'COS' \
     --lr $lr \
-    --epochs 10 \
+    --epochs $epochs \
     --d_model 768 \
     --n_heads 4 \
-    --d_ff 768 \
+    --d_ff 128 \
     --dropout 0 \
     --enc_in 7 \
     --c_out 7 \
+    --output_dim 64 \
     --freq h \
     --img_width 256 \
     --img_height 256 \
@@ -43,7 +45,7 @@ python ./src/main_long_forecast.py \
     --llm_layer 6 \
     --llm_dim 3584 \
     --itr 1 \
-    --model $model \
+    --model_name $model \
     --loss mse \
     --key_metric mse_loss \
     # --no_savemodel 

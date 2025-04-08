@@ -295,6 +295,9 @@ class Options(object):
             "--dec_in", type=int, default=7, help="decoder input size"
         )
         self.parser.add_argument(
+            "--output_dim", type=int, default=64, help="ts2vec output dimension"
+        )
+        self.parser.add_argument(
             "--pct_start", type=float, default=0.2, help="pct_start"
         )
         self.parser.add_argument("--c_out", type=int, default=7, help="output size")
