@@ -110,3 +110,48 @@ class ALL4ONE(nn.Module):
         dec_out = self.normalize_layers(dec_out, "denorm")
 
         return dec_out
+
+
+class ALL4ONEonlyTS2VEC(nn.Module):
+    def __init__(self, config, device):
+        super(ALL4ONEonlyTS2VEC, self).__init__()
+        self.seq_len = config.seq_len
+        self.output_dim = config.output_dim
+
+        self.ts2vec = TS2Vec(
+            config=config, input_dims=1, output_dims=config.output_dim, device=device
+        ).bfloat16()
+
+        # outprojection
+        if config.task == "forecast":
+            self.output_projection = FlattenHead(
+                nf=self.seq_len * self.output_dim,
+                seq_window=config.pred_len,
+                head_dropout=config.dropout,
+            ).to(dtype=torch.bfloat16, device=device)
+
+        self.normalize_layers = Normalize(config.enc_in, affine=False)
+
+    def get_ts2vec_loss(self, x_enc):
+        return self.ts2vec.fit(x_enc)
+
+    def forward(self, x_enc, x_mask, y, y_mask):
+        B, T, N = x_enc.shape
+
+        x_enc = self.normalize_layers(x_enc, "norm")
+        # time series embedding
+        x_enc = self.ts2vec.encode(
+            x_enc,
+            # encoding_window="full_series",
+            # causal=True,
+            # sliding_length=1,
+            # sliding_padding=200
+        )
+        # x_enc = self.ts2vec_embedding(x_enc.permute(0, 2, 1))
+
+        dec_out = x_enc
+        # output
+        dec_out = self.output_projection(dec_out)  # [B, pred_len, 1]
+        dec_out = self.normalize_layers(dec_out, "denorm")
+
+        return dec_out

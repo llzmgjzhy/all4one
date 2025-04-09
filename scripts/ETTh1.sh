@@ -2,8 +2,10 @@
 export CUDA_VISIBLE_DEVICES=0
 
 seq_len=512
-model=ALL4ONE
-batch_size=64
+# model=ALL4ONE
+model=ALL4ONEonlyTS2VEC
+batch_size=256
+output_dim=64
 epochs=10
 
 for percent in 100
@@ -35,7 +37,7 @@ python ./src/main_long_forecast.py \
     --dropout 0 \
     --enc_in 7 \
     --c_out 7 \
-    --output_dim 64 \
+    --output_dim $output_dim \
     --freq h \
     --img_width 256 \
     --img_height 256 \

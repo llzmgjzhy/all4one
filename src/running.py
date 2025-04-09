@@ -144,6 +144,7 @@ class ForecastingSupervisedRunner(BaseRunner):
         super(ForecastingSupervisedRunner, self).__init__(*args, **kwargs)
 
         self.mae_criterion = torch.nn.L1Loss(reduction="none")
+        self.suported_models = {"ALL4ONE", "ALL4ONEonlyTS2VEC"}
 
     def train_epoch(self, epoch_num=None):
 
@@ -164,22 +165,17 @@ class ForecastingSupervisedRunner(BaseRunner):
             predictions = predictions[:, -self.config.pred_len :, f_dim:]
             targets = targets[:, -self.config.pred_len :, f_dim:]
 
-            if self.config.model_name == "ALL4ONE":
-                ts2vec_loss = self.model.get_ts2vec_loss(X)
-                loss = self.loss_module(predictions, targets)
-                batch_loss = loss.sum()
-                mean_loss = loss.mean()
-            else:
-                loss = self.loss_module(predictions, targets)
-                batch_loss = loss.sum()
-                mean_loss = loss.mean()  # mean loss (over samples)
+            loss = self.loss_module(predictions, targets)
+            batch_loss = loss.sum()
+            mean_loss = loss.mean()
 
-            # Zero gradients, perform a backward pass, and update the weights.
-            backward_loss = (
-                mean_loss
-                if self.config.model_name != "ALL4ONE"
-                else ts2vec_loss + mean_loss
-            )
+            if self.config.model_name in self.suported_models:
+                ts2vec_loss = self.model.get_ts2vec_loss(X)
+                backward_loss = ts2vec_loss + mean_loss
+            else:
+                backward_loss = mean_loss
+
+            # perform a backward pass, and update the weights.
             self.accelerator.backward(backward_loss)  # for mixed precision training
 
             # torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)
@@ -248,7 +244,9 @@ class ForecastingSupervisedRunner(BaseRunner):
                 self.print_callback(i, metrics, prefix="Evaluating " + ending)
 
             total_samples += mse_loss.numel()
-            epoch_mse_loss += batch_mse_loss.half().cpu().item()  # add total loss of batch
+            epoch_mse_loss += (
+                batch_mse_loss.half().cpu().item()
+            )  # add total loss of batch
             epoch_mae_loss += batch_mae_loss.half().cpu().item()
 
         epoch_mse_loss = (

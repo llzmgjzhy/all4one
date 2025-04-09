@@ -139,6 +139,7 @@ class Options(object):
         self.parser.add_argument(
             "--seed",
             type=int,
+            default=2021,
             help="Seed used for splitting sets. None by default, set to an integer for reproducibility",
         )
 
