@@ -2,10 +2,10 @@
 export CUDA_VISIBLE_DEVICES=0
 
 seq_len=512
-# model=ALL4ONE
-model=ALL4ONEonlyTS2VEC
-batch_size=256
-output_dim=64
+model=ALL4ONE
+# model=ALL4ONEonlyTS2VEC
+batch_size=64
+output_dim=1
 epochs=10
 
 for percent in 100
@@ -50,6 +50,7 @@ python ./src/main_long_forecast.py \
     --model_name $model \
     --loss mse \
     --key_metric mse_loss \
+    --seed 2025 \
     # --no_savemodel 
 done
 done

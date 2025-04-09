@@ -9,6 +9,7 @@ from einops import rearrange
 from models.ts2vec import TS2Vec
 from math import sqrt
 from models.TimeLLM import ReprogrammingLayer
+from models.embed import TokenEmbedding, PatchEmbedding
 from layers.StandardNorm import Normalize
 from models.util import tensor_line_plots
 import matplotlib.pyplot as plt
@@ -58,14 +59,36 @@ class ALL4ONE(nn.Module):
         self.image_processor = Qwen2VLImageProcessorFast()
 
         # ts2vec embedding align llm input dims
-        self.ts2vec_embedding = nn.Linear(config.seq_len, config.llm_dim).to(
-            dtype=torch.bfloat16, device=device
-        )
+        # self.ts2vec_embedding = nn.Linear(config.seq_len, config.llm_dim).to(
+        #     dtype=torch.bfloat16, device=device
+        # )
+        # self.ts2vec_embedding = TokenEmbedding(
+        #     c_in=config.seq_len,
+        #     d_model=config.llm_dim,
+        # ).to(dtype=torch.bfloat16, device=device)
+        self.ts2vec_embedding = PatchEmbedding(
+            config.llm_dim, config.patch_size, config.stride, config.dropout
+        ).to(dtype=torch.bfloat16, device=device)
+        self.patch_nums = int((config.seq_len - self.patch_size) / self.stride + 2)
+
+        # llm_output projection
+        # self.llm_output_projection = nn.Linear(config.seq_len, config.seq_len).to(
+        #     dtype=torch.bfloat16, device=device
+        # )
+        self.llm_output_projection = nn.Sequential(
+            nn.Conv1d(
+                in_channels=self.output_dim,
+                out_channels=self.output_dim,
+                kernel_size=3,
+                padding=1,
+            ),
+            nn.GELU(),
+        ).to(dtype=torch.bfloat16, device=device)
 
         # outprojection
         if config.task == "forecast":
             self.output_projection = FlattenHead(
-                nf=self.d_ff * self.output_dim,
+                nf=self.seq_len * self.output_dim,
                 seq_window=config.pred_len,
                 head_dropout=config.dropout,
             ).to(dtype=torch.bfloat16, device=device)
@@ -97,13 +120,19 @@ class ALL4ONE(nn.Module):
             # sliding_length=1,
             # sliding_padding=200
         )
-        x_enc = self.ts2vec_embedding(x_enc.permute(0, 2, 1))
+        x_enc_embed, _ = self.ts2vec_embedding(
+            x_enc.permute(0, 2, 1)
+        )  # [B, patch_nums, llm_dim]
 
         llm_enc_out = torch.cat(
-            [images_embeds, x_enc], dim=1
+            [images_embeds, x_enc_embed], dim=1
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
-        dec_out = dec_out[:, -self.output_dim :, : self.d_ff]
+        dec_out = dec_out[:, -self.output_dim :, : self.seq_len]
+
+        # simulate residual connections to optimize on ts2vec and enable LLM to learn increments
+        dec_out = self.llm_output_projection(dec_out)  # [B, output_dim, seq_len]
+        dec_out = dec_out + x_enc.permute(0, 2, 1)  # [B, output_dim, seq_len]
 
         # output
         dec_out = self.output_projection(dec_out)  # [B, pred_len, 1]
