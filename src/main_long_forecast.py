@@ -36,6 +36,7 @@ def main(config):
     if config.seed is not None:
         random.seed(config.seed)
         torch.manual_seed(config.seed)
+        torch.cuda.manual_seed_all(config.seed)
         np.random.seed(config.seed)
 
     device = torch.device("cuda:0")

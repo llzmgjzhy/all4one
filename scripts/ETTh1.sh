@@ -2,7 +2,8 @@
 export CUDA_VISIBLE_DEVICES=0
 
 seq_len=512
-model=ALL4ONE
+# model=ALL4ONE
+model=ALL4ONEFAST
 # model=ALL4ONEonlyTS2VEC
 batch_size=64
 output_dim=1

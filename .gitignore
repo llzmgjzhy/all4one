@@ -4,6 +4,9 @@
 # experiment folder
 src/experiments/
 
+# models cache folder
+src/models/cache/
+
 # test file
 temp.py
 

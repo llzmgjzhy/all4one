@@ -144,11 +144,12 @@ class ForecastingSupervisedRunner(BaseRunner):
         super(ForecastingSupervisedRunner, self).__init__(*args, **kwargs)
 
         self.mae_criterion = torch.nn.L1Loss(reduction="none")
-        self.suported_models = {"ALL4ONE", "ALL4ONEonlyTS2VEC"}
+        self.suported_models = {"ALL4ONE", "ALL4ONEFAST", "ALL4ONEonlyTS2VEC"}
 
     def train_epoch(self, epoch_num=None):
 
         self.model = self.model.train()
+        self.stage = "train"
 
         epoch_loss = 0  # total loss of epoch
         total_samples = 0  # total samples in epoch
@@ -159,7 +160,7 @@ class ForecastingSupervisedRunner(BaseRunner):
             X, targets, x_mask, y_mask = batch
             X = X.to(device=self.device, dtype=torch.bfloat16)
             targets = targets.to(device=self.device, dtype=torch.bfloat16)
-            predictions = self.model(X, x_mask, targets, y_mask)
+            predictions = self.model(X, x_mask, targets, y_mask, self.stage, i)
 
             f_dim = -1 if self.config.features == "MS" else 0
             predictions = predictions[:, -self.config.pred_len :, f_dim:]
@@ -198,7 +199,7 @@ class ForecastingSupervisedRunner(BaseRunner):
         self.epoch_metrics["loss"] = epoch_loss
         return self.epoch_metrics
 
-    def evaluate(self, epoch_num=None, keep_all=True):
+    def evaluate(self, epoch_num=None, keep_all=True, stage="val"):
 
         self.model = self.model.eval()
 
@@ -217,7 +218,7 @@ class ForecastingSupervisedRunner(BaseRunner):
             X, targets, x_mask, y_mask = batch
             X = X.to(device=self.device, dtype=torch.bfloat16)
             targets = targets.to(device=self.device, dtype=torch.bfloat16)
-            predictions = self.model(X, x_mask, targets, y_mask)
+            predictions = self.model(X, x_mask, targets, y_mask, stage, i)
 
             f_dim = -1 if self.config.features == "MS" else 0
             predictions = predictions[:, -self.config.pred_len :, f_dim:]
@@ -428,7 +429,9 @@ def validate(
     logger.info("Evaluating on validation set ...")
     eval_start_time = time.time()
     with torch.no_grad():
-        aggr_metrics, per_batch = val_evaluator.evaluate(epoch, keep_all=True)
+        aggr_metrics, per_batch = val_evaluator.evaluate(
+            epoch, keep_all=True, stage="val"
+        )
     eval_runtime = time.time() - eval_start_time
     logger.info(
         "Validation runtime: {} hours, {} minutes, {} seconds\n".format(
@@ -487,7 +490,9 @@ def test(test_evaluator):
     logger.info("Testing on test set ...")
     eval_start_time = time.time()
     with torch.no_grad():
-        aggr_metrics, per_batch = test_evaluator.evaluate(epoch_num=None, keep_all=True)
+        aggr_metrics, per_batch = test_evaluator.evaluate(
+            epoch_num=None, keep_all=True, stage="test"
+        )
         del aggr_metrics["epoch"]
     aggr_metrics = {f"test_{key}": value for key, value in aggr_metrics.items()}
     eval_runtime = time.time() - eval_start_time
