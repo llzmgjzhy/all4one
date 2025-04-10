@@ -26,7 +26,7 @@ class FlattenHead(nn.Module):
         x = self.flatten(x)
         x = self.linear(x)
         x = self.dropout(x)
-        return x.unsqueeze(-1)
+        return x
 
 
 class ALL4ONE(nn.Module):
@@ -72,18 +72,23 @@ class ALL4ONE(nn.Module):
         self.patch_nums = int((config.seq_len - self.patch_size) / self.stride + 2)
 
         # llm_output projection
-        # self.llm_output_projection = nn.Linear(config.seq_len, config.seq_len).to(
-        #     dtype=torch.bfloat16, device=device
-        # )
-        self.llm_output_projection = nn.Sequential(
-            nn.Conv1d(
-                in_channels=self.output_dim,
-                out_channels=self.output_dim,
-                kernel_size=3,
-                padding=1,
-            ),
-            nn.GELU(),
-        ).to(dtype=torch.bfloat16, device=device)
+        self.llm_output_projection = nn.Linear(self.patch_nums, config.output_dim).to(
+            dtype=torch.bfloat16, device=device
+        )
+        # self.llm_output_projection = nn.Sequential(
+        #     nn.Conv1d(
+        #         in_channels=self.output_dim,
+        #         out_channels=self.output_dim,
+        #         kernel_size=3,
+        #         padding=1,
+        #     ),
+        #     nn.GELU(),
+        # ).to(dtype=torch.bfloat16, device=device)
+        # self.llm_output_projection = FlattenHead(
+        #     nf=self.patch_nums * self.d_ff,
+        #     seq_window=config.seq_len,
+        #     head_dropout=config.dropout,
+        # ).to(dtype=torch.bfloat16, device=device)
 
         # outprojection
         if config.task == "forecast":
@@ -120,7 +125,7 @@ class ALL4ONE(nn.Module):
             # sliding_length=1,
             # sliding_padding=200
         )
-        x_enc_embed, _ = self.ts2vec_embedding(
+        x_enc_embed, n_vars = self.ts2vec_embedding(
             x_enc.permute(0, 2, 1)
         )  # [B, patch_nums, llm_dim]
 
@@ -128,14 +133,16 @@ class ALL4ONE(nn.Module):
             [images_embeds, x_enc_embed], dim=1
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
-        dec_out = dec_out[:, -self.output_dim :, : self.seq_len]
+        dec_out = dec_out[:, -self.patch_nums :, : self.seq_len]
 
         # simulate residual connections to optimize on ts2vec and enable LLM to learn increments
-        dec_out = self.llm_output_projection(dec_out)  # [B, output_dim, seq_len]
-        dec_out = dec_out + x_enc.permute(0, 2, 1)  # [B, output_dim, seq_len]
+        dec_out = self.llm_output_projection(
+            dec_out.permute(0, 2, 1)
+        )  # [B, output_dim, seq_len]
+        dec_out = dec_out + x_enc  # [B, seq_len, output_dim]
 
         # output
-        dec_out = self.output_projection(dec_out)  # [B, pred_len, 1]
+        dec_out = self.output_projection(dec_out).unsqueeze(-1)  # [B, pred_len, 1]
         dec_out = self.normalize_layers(dec_out, "denorm")
 
         return dec_out
