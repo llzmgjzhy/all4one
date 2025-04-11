@@ -253,3 +253,11 @@ class TS2Vec(nn.Module):
         output = torch.cat(output, dim=0)
 
         return output
+
+    def save(self, fn):
+        """Save the model to a file.
+
+        Args:
+            fn (str): filename.
+        """
+        torch.save(self.net.state_dict(), fn)
