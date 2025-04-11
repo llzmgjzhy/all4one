@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from models.model import TSEncoder
@@ -11,7 +12,7 @@ from models.util import (
 from models.loss import hierarchical_contrastive_loss
 
 
-class TS2Vec(torch.nn.Module):
+class TS2Vec(nn.Module):
     """The TS2Vec model"""
 
     def __init__(
@@ -43,6 +44,7 @@ class TS2Vec(torch.nn.Module):
 
         super().__init__()
         self.device = device
+        self.lr = config.lr
         self.max_train_length = max_train_length
         self.temporal_unit = temporal_unit
 
@@ -51,7 +53,7 @@ class TS2Vec(torch.nn.Module):
             output_dims=output_dims,
             hidden_dims=hidden_dims,
             depth=depth,
-        ).to(self.device)
+        ).to(self.device, dtype=torch.bfloat16)
         self.net = torch.optim.swa_utils.AveragedModel(self._net)
         self.net.update_parameters(self._net)
 
@@ -61,58 +63,83 @@ class TS2Vec(torch.nn.Module):
         self.n_epochs = 0
         self.n_iters = 0
 
-    def fit(self, train_data, n_epochs=None, verbose=False):
+    def fit(self, train_loader, n_epochs=20, verbose=False):
         """Training the TS2Vec model.
 
         Args:
-          train_data : The training data. It should have a shape of (n_instance, n_timestamps, n_features). All missing data should be set to NaN.
+          train_loader : The training loader.
           n_epochs (Union[int, NoneType]): The number of epochs.
           verbose (bool): Whether to print the training information.
         """
 
-        assert train_data.ndim == 3
+        optimizer = torch.optim.AdamW(self._net.parameters(), lr=self.lr)
 
-        if self.max_train_length is not None:
-            sections = train_data.shape[1] // self.max_train_length
-            if sections >= 2:
-                split_tensors = torch.tensor_split(train_data, sections, dim=1)
-                train_data = torch.cat(split_tensors, dim=0)
+        loss_log = []
 
-        nan_mask = torch.isnan(train_data)
-        all_nan_last_dim = nan_mask.all(dim=-1)
-        temporal_missing = all_nan_last_dim.any(dim=0)
-        if temporal_missing[0] or temporal_missing[-1]:
-            train_data = centerize_vary_length_series(train_data)
+        while True:
+            if n_epochs is not None and self.n_epochs >= n_epochs:
+                break
 
-        train_data = train_data[~torch.isnan(train_data).all(dim=2).all(dim=1)]
+            cum_loss = 0
+            n_epoch_iters = 0
 
-        ts_l = train_data.shape[1]
-        crop_l = torch.randint(
-            low=2 ** (self.temporal_unit + 1), high=ts_l + 1, size=(1,)
-        ).item()
-        crop_left = torch.randint(ts_l - crop_l + 1, size=(1,)).item()
-        crop_right = crop_left + crop_l
-        crop_eleft = torch.randint(crop_left + 1, size=(1,)).item()
-        crop_eright = torch.randint(low=crop_right, high=ts_l + 1, size=(1,)).item()
-        crop_offset = torch.randint(
-            low=-crop_eleft, high=ts_l - crop_eright + 1, size=(train_data.size(0),)
-        )
+            for batch in train_loader:
+                X, targets, padding_masks, IDs = batch
+                if (
+                    self.max_train_length is not None
+                    and X.size(1) > self.max_train_length
+                ):
+                    window_offset = np.random.randint(
+                        X.size(1) - self.max_train_length + 1
+                    )
+                    X = X[:, window_offset : window_offset + self.max_train_length]
+                X = X.to(self.device, dtype=torch.bfloat16)
 
-        out1 = self._net(
-            take_per_row(train_data, crop_offset + crop_eleft, crop_right - crop_eleft)
-        )
-        out1 = out1[:, -crop_l:]
+                ts_l = X.shape[1]
+                crop_l = torch.randint(
+                    low=2 ** (self.temporal_unit + 1), high=ts_l + 1, size=(1,)
+                ).item()
+                crop_left = torch.randint(ts_l - crop_l + 1, size=(1,)).item()
+                crop_right = crop_left + crop_l
+                crop_eleft = torch.randint(crop_left + 1, size=(1,)).item()
+                crop_eright = torch.randint(
+                    low=crop_right, high=ts_l + 1, size=(1,)
+                ).item()
+                crop_offset = torch.randint(
+                    low=-crop_eleft, high=ts_l - crop_eright + 1, size=(X.size(0),)
+                )
 
-        out2 = self._net(
-            take_per_row(train_data, crop_offset + crop_left, crop_eright - crop_left)
-        )
-        out2 = out2[:, :crop_l]
+                optimizer.zero_grad()
 
-        loss = hierarchical_contrastive_loss(
-            out1, out2, temporal_unit=self.temporal_unit
-        )
+                out1 = self._net(
+                    take_per_row(X, crop_offset + crop_eleft, crop_right - crop_eleft)
+                )
+                out1 = out1[:, -crop_l:]
 
-        return loss
+                out2 = self._net(
+                    take_per_row(X, crop_offset + crop_left, crop_eright - crop_left)
+                )
+                out2 = out2[:, :crop_l]
+
+                loss = hierarchical_contrastive_loss(
+                    out1, out2, temporal_unit=self.temporal_unit
+                )
+                loss.backward()
+                optimizer.step()
+                self.net.update_parameters(self._net)
+
+                cum_loss += loss.item()
+                n_epoch_iters += 1
+
+                self.n_iters += 1
+
+            cum_loss /= n_epoch_iters
+            loss_log.append(cum_loss)
+            if verbose:
+                print(f"Epoch #{self.n_epochs}: loss={cum_loss}")
+            self.n_epochs += 1
+
+        return loss_log
 
     def _eval_with_pooling(self, x, mask, slicing=None, encoding_window=None):
         out = self.net(x.to(self.device, non_blocking=True), mask)

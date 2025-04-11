@@ -20,3 +20,6 @@ temp.py
 
 # huggingface model state
 src/models/huggingface_hub/
+
+# ts2vec model
+src/models/ts2vec/

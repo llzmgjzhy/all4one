@@ -144,7 +144,6 @@ class ForecastingSupervisedRunner(BaseRunner):
         super(ForecastingSupervisedRunner, self).__init__(*args, **kwargs)
 
         self.mae_criterion = torch.nn.L1Loss(reduction="none")
-        self.suported_models = {"ALL4ONE", "ALL4ONEFAST", "ALL4ONEonlyTS2VEC"}
 
     def train_epoch(self, epoch_num=None):
 
@@ -170,11 +169,7 @@ class ForecastingSupervisedRunner(BaseRunner):
             batch_loss = loss.sum()
             mean_loss = loss.mean()
 
-            if self.config.model_name in self.suported_models:
-                ts2vec_loss = self.model.get_ts2vec_loss(X)
-                backward_loss = ts2vec_loss + mean_loss
-            else:
-                backward_loss = mean_loss
+            backward_loss = mean_loss
 
             # perform a backward pass, and update the weights.
             self.accelerator.backward(backward_loss)  # for mixed precision training

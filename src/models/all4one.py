@@ -53,7 +53,8 @@ class ALL4ONE(nn.Module):
 
         self.ts2vec = TS2Vec(
             config=config, input_dims=1, output_dims=config.output_dim, device=device
-        ).bfloat16()
+        )
+        self.ts2vec.to(dtype=torch.bfloat16, device=device)
 
         # visual module
         self.visual = self.model.visual
@@ -330,7 +331,7 @@ class ALL4ONEonlyTS2VEC(nn.Module):
 
         dec_out = x_enc
         # output
-        dec_out = self.output_projection(dec_out)  # [B, pred_len, 1]
+        dec_out = self.output_projection(dec_out).unsqueeze(-1)  # [B, pred_len, 1]
         dec_out = self.normalize_layers(dec_out, "denorm")
 
         return dec_out
