@@ -315,7 +315,7 @@ class ALL4ONEFAST(nn.Module):
 
         llm_enc_out = prompt_embeddings  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
-        dec_out = dec_out[:, -self.patch_nums :, : self.seq_len]
+        dec_out = dec_out[:, -(self.patch_nums + 1) : -1, : self.seq_len]
 
         # output projection
         dec_out = self.output_projection(dec_out).unsqueeze(

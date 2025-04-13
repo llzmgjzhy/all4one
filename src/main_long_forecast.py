@@ -1,5 +1,6 @@
 import logging
 import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import sys
 import time
 import copy

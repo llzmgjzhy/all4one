@@ -5,7 +5,7 @@ seq_len=512
 # model=ALL4ONE
 model=ALL4ONEFAST
 # model=ALL4ONEonlyTS2VEC
-batch_size=64
+batch_size=32
 output_dim=1
 epochs=20
 
