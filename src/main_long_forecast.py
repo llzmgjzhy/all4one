@@ -19,7 +19,7 @@ from optimizers import get_optimizer
 from models import model_factory
 from models.loss import get_loss_module
 from datasets.data_factory import data_provider
-from utils.tools import EarlyStopping, adjust_learning_rate
+from utils.tools import EarlyStopping, adjust_learning_rate, load_content
 
 
 def main(config):
@@ -43,6 +43,9 @@ def main(config):
     logger.info(f"Using device: {device}")
     if device == "cuda":
         logger.info(f"Device index: {torch.cuda.current_device()}")
+
+    # load content
+    config.content = load_content(config)
 
     # Build data
     logger.info("Loading and preprocessing data ...")

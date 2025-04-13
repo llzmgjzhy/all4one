@@ -3,8 +3,8 @@ export CUDA_VISIBLE_DEVICES=0
 
 seq_len=512
 # model=ALL4ONE
-model=ALL4ONEFAST
-# model=ALL4ONEonlyTS2VEC
+# model=ALL4ONEFAST
+model=ALL4ONEonlyTS2VEC
 batch_size=64
 output_dim=1
 epochs=20
@@ -19,12 +19,12 @@ do
 python ./src/main_long_forecast.py \
     --task forecast \
     --comment "forecasting using $model" \
-    --name "longForecasting_ETTh1" \
+    --name "longForecasting_ETTm1" \
     --root_path ./src/datasets/ETT-small/ \
-    --data_path ETTh1.csv \
+    --data_path ETTm1.csv \
     --output_dir ./src/experiments \
     --records_file LongForecast_record.xlsx \
-    --data ETTh1 \
+    --data ETTm1 \
     --ts2vec_path ./src/models/ts2vec/ETTh1_1_64.pt \
     --seq_len $seq_len \
     --label_len 168 \

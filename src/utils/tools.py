@@ -70,3 +70,13 @@ class EarlyStopping:
         else:
             self.best_score = score
             self.counter = 0
+
+
+def load_content(args):
+    if "ETT" in args.data:
+        file = "ETT"
+    else:
+        file = args.data
+    with open("./src/datasets/prompt_bank/{0}.txt".format(file), "r") as f:
+        content = f.read()
+    return content
