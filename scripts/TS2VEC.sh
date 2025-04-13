@@ -1,7 +1,7 @@
 model=TS2VEC
 batch_size=64
 output_dim=1
-epochs=20
+epochs=200
 lr=0.001
 data=ETTh1
 

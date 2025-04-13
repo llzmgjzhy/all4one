@@ -3,11 +3,11 @@ export CUDA_VISIBLE_DEVICES=0
 
 seq_len=512
 # model=ALL4ONE
-# model=ALL4ONEFAST
-model=ALL4ONEonlyTS2VEC
+model=ALL4ONEFAST
+# model=ALL4ONEonlyTS2VEC
 batch_size=64
 output_dim=1
-epochs=20
+epochs=2
 
 for percent in 100
 do
@@ -25,6 +25,7 @@ python ./src/main_long_forecast.py \
     --output_dir ./src/experiments \
     --records_file LongForecast_record.xlsx \
     --data ETTh1 \
+    --ts2vec_path ./src/models/ts2vec/ETTh1_1_64.pt \
     --seq_len $seq_len \
     --label_len 168 \
     --pred_len $pred_len \

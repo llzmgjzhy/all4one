@@ -304,6 +304,11 @@ class Options(object):
         self.parser.add_argument("--c_out", type=int, default=7, help="output size")
         self.parser.add_argument("--llm_layers", type=int, default=6)
         self.parser.add_argument("--percent", type=int, default=100)
+        self.parser.add_argument(
+            "--ts2vec_path",
+            default="./src/models/ts2vec/ts2vec.pth",
+            help="TS2VEC model state dict path",
+        )
 
         # image modality
         self.parser.add_argument(

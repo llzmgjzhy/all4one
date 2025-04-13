@@ -154,6 +154,7 @@ class ALL4ONEFAST(nn.Module):
     def __init__(self, config, device):
         super(ALL4ONEFAST, self).__init__()
         self.seq_len = config.seq_len
+        self.pred_len = config.pred_len
         self.patch_size = config.patch_size
         self.stride = config.stride
         self.d_model = config.d_model
@@ -262,13 +263,13 @@ class ALL4ONEFAST(nn.Module):
 
         x_enc = self.normalize_layers(x_enc, "norm")
         # time series embedding
-        x_enc = self.ts2vec.encode(
-            x_enc,
-            # encoding_window="full_series",
-            # causal=True,
-            # sliding_length=1,
-            # sliding_padding=200
-        )
+        # x_enc = self.ts2vec.encode(
+        #     x_enc,
+        #     # encoding_window="full_series",
+        #     # causal=True,
+        #     # sliding_length=1,
+        #     # sliding_padding=200
+        # )
         x_enc_embed, n_vars = self.ts2vec_embedding(
             x_enc.permute(0, 2, 1)
         )  # [B, patch_nums, llm_dim]
@@ -277,16 +278,16 @@ class ALL4ONEFAST(nn.Module):
             [images_embeds, x_enc_embed], dim=1
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
-        dec_out = dec_out[:, -self.patch_nums :, : self.seq_len]
+        dec_out = dec_out[:, -self.patch_nums :, : self.pred_len]
 
         # simulate residual connections to optimize on ts2vec and enable LLM to learn increments
-        dec_out = self.llm_output_projection(
+        llm_out = self.llm_output_projection(
             dec_out.permute(0, 2, 1)
-        )  # [B, output_dim, seq_len]
-        dec_out = dec_out + x_enc  # [B, seq_len, output_dim]
+        )  # [B, pred_len, output_dim]
 
         # output
-        dec_out = self.output_projection(dec_out).unsqueeze(-1)  # [B, pred_len, 1]
+        dec_out = dec_out + llm_out
+        dec_out = self.output_projection(x_enc).unsqueeze(-1)  # [B, pred_len, 1]
         dec_out = self.normalize_layers(dec_out, "denorm")
 
         return dec_out
@@ -301,6 +302,7 @@ class ALL4ONEonlyTS2VEC(nn.Module):
         self.ts2vec = TS2Vec(
             config=config, input_dims=1, output_dims=config.output_dim, device=device
         ).bfloat16()
+        self.ts2vec.net.load_state_dict(torch.load(config.ts2vec_path))
 
         # outprojection
         if config.task == "forecast":
