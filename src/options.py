@@ -309,6 +309,11 @@ class Options(object):
             default="./src/models/ts2vec/ts2vec.pth",
             help="TS2VEC model state dict path",
         )
+        self.parser.add_argument(
+            "--residual_path",
+            default="./src/models/residual/residual.pth",
+            help="residual model state dict path",
+        )
 
         # image modality
         self.parser.add_argument(

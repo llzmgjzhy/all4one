@@ -23,3 +23,6 @@ src/models/huggingface_hub/
 
 # ts2vec model
 src/models/ts2vec/
+
+# residual projection model
+src/models/residual_projection/

@@ -17,6 +17,25 @@ import matplotlib.pyplot as plt
 import os
 
 
+class SwiGLUMLP(nn.Module):
+    def __init__(
+        self,
+        in_features,
+        hidden_features=None,
+    ):
+        super().__init__()
+        self.hidden_size = in_features
+        self.intermediate_size = hidden_features
+        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        self.act_fn = nn.SiLU()
+
+    def forward(self, x):
+        down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        return down_proj
+
+
 class Mlp(nn.Module):
     def __init__(
         self,
@@ -188,6 +207,8 @@ class ALL4ONEFAST(nn.Module):
         self.d_ff = config.d_ff
         self.d_llm = config.llm_dim
         self.output_dim = config.output_dim
+        # values determined through experiments
+        self.image_token_nums = 81
 
         # dataset
         self.description = config.content
@@ -197,14 +218,10 @@ class ALL4ONEFAST(nn.Module):
             "Qwen/Qwen2.5-VL-7B-Instruct",
             attn_implementation="flash_attention_2",
             torch_dtype=torch.bfloat16,
-        )
+        ).to(device=device)
         for param in self.model.parameters():
             param.requires_grad = False
         self.llm_model = self.model.model
-
-        self.ts2vec = TS2Vec(
-            config=config, input_dims=1, output_dims=config.output_dim, device=device
-        ).bfloat16()
 
         # visual module
         self.visual = self.model.visual
@@ -216,6 +233,7 @@ class ALL4ONEFAST(nn.Module):
             "Qwen/Qwen2.5-VL-7B-Instruct",
             attn_implementation="flash_attention_2",
             torch_dtype=torch.bfloat16,
+            use_fast=True,
         ).tokenizer
 
         self.image_token = (
@@ -231,20 +249,33 @@ class ALL4ONEFAST(nn.Module):
         self.patch_nums = int((config.seq_len - self.patch_size) / self.stride + 2)
 
         # residual embedding, token embed on x_enc, and llm output will be added, speed up training
-        self.x_enc_residual_embed = Mlp(
-            in_features=self.seq_len,
-            hidden_features=config.d_model,
-            out_features=self.pred_len,
-            drop=config.dropout,
+        self.x_enc_residual_embed = FlattenHead(
+            nf=self.seq_len * self.output_dim,
+            seq_window=config.pred_len,
+            head_dropout=config.dropout,
         ).to(dtype=torch.bfloat16, device=device)
+        x_enc_residual_embed_params = {
+            k.replace("output_projection.linear", "linear"): v
+            for k, v in torch.load(config.residual_path, map_location=device)[
+                "state_dict"
+            ].items()
+        }
+        self.x_enc_residual_embed.load_state_dict(x_enc_residual_embed_params)
 
         # outprojection
         if config.task == "forecast":
-            self.output_projection = FlattenHead(
-                nf=self.patch_nums * self.seq_len,
-                seq_window=self.pred_len,
-                head_dropout=config.dropout,
+            # self.output_projection = FlattenHead(
+            #     nf=(self.patch_nums + self.image_token_nums) * self.seq_len,
+            #     seq_window=self.pred_len,
+            #     head_dropout=config.dropout,
+            # ).to(dtype=torch.bfloat16, device=device)
+            self.output_projection = Mlp(
+                in_features=(self.patch_nums + self.image_token_nums) * self.seq_len,
+                hidden_features=self.d_model,
+                out_features=self.pred_len * self.output_dim,
+                drop=config.dropout,
             ).to(dtype=torch.bfloat16, device=device)
+            self.flatten = nn.Flatten(start_dim=-2)
 
         self.normalize_layers = Normalize(config.enc_in, affine=False)
 
@@ -260,8 +291,8 @@ class ALL4ONEFAST(nn.Module):
         B, T, N = x_enc.shape
         x_enc = self.normalize_layers(x_enc, "norm")
 
-        x_enc_residual = self.x_enc_residual_embed(x_enc.permute(0, 2, 1)).transpose(
-            1, 2
+        x_enc_residual = self.x_enc_residual_embed(x_enc).unsqueeze(
+            -1
         )  # [B, pred_len, N]
 
         # statistics prompt
@@ -387,10 +418,13 @@ class ALL4ONEFAST(nn.Module):
             [prompt_embeddings, x_enc_embed, im_end_embed], dim=1
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
-        dec_out = dec_out[:, -(self.patch_nums + 1) : -1, : self.seq_len]
+        # using image tokens and x_enc tokens as output dim
+        dec_out = dec_out[
+            :, -(image_token_nums[0] + self.patch_nums + 1) : -1, : self.seq_len
+        ]
 
         # output projection
-        dec_out = self.output_projection(dec_out).unsqueeze(
+        dec_out = self.output_projection(self.flatten(dec_out)).unsqueeze(
             -1
         )  # [B, pred_len, output_dim]
         # residual connection
@@ -404,11 +438,8 @@ class ALL4ONEonlyTS2VEC(nn.Module):
     def __init__(self, config, device):
         super(ALL4ONEonlyTS2VEC, self).__init__()
         self.seq_len = config.seq_len
+        self.pred_len = config.pred_len
         self.output_dim = config.output_dim
-
-        self.ts2vec = TS2Vec(
-            config=config, input_dims=1, output_dims=config.output_dim, device=device
-        ).bfloat16()
 
         # outprojection
         if config.task == "forecast":
@@ -427,19 +458,14 @@ class ALL4ONEonlyTS2VEC(nn.Module):
         B, T, N = x_enc.shape
 
         x_enc = self.normalize_layers(x_enc, "norm")
-        # time series embedding
-        # x_enc = self.ts2vec.encode(
-        #     x_enc,
-        #     # encoding_window="full_series",
-        #     # causal=True,
-        #     # sliding_length=1,
-        #     # sliding_padding=200
-        # )
-        # x_enc = self.ts2vec_embedding(x_enc.permute(0, 2, 1))
 
         dec_out = x_enc
         # output
         dec_out = self.output_projection(dec_out).unsqueeze(-1)  # [B, pred_len, 1]
+        # dec_out = self.mlp_projection(dec_out.permute(0, 2, 1)).transpose(
+        #     1, 2
+        # )  # [B, pred_len, 1]
+
         dec_out = self.normalize_layers(dec_out, "denorm")
 
         return dec_out
