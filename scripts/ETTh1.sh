@@ -34,7 +34,7 @@ python ./src/main_long_forecast.py \
     --lr $lr \
     --epochs $epochs \
     --d_model 768 \
-    --n_heads 4 \
+    --n_heads 8 \
     --d_ff 128 \
     --dropout 0.1 \
     --enc_in 7 \

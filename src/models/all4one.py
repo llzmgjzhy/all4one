@@ -62,6 +62,29 @@ class Mlp(nn.Module):
         return x
 
 
+class AdaptiveFeatureAggregation(nn.Module):
+    def __init__(self, llm_dim, num_heads, output_dim):
+        super().__init__()
+        self.llm_dim = llm_dim
+        self.num_heads = num_heads
+        self.output_dim = output_dim
+
+        self.attention = nn.MultiheadAttention(
+            embed_dim=self.llm_dim, num_heads=self.num_heads, batch_first=True
+        )
+
+        self.query = nn.Parameter(torch.randn(1, 1, self.llm_dim))
+
+        self.linear = nn.Linear(self.llm_dim, self.output_dim)
+
+    def forward(self, x):
+        B, T, N = x.shape
+        query = self.query.expand(B, -1, -1)
+        attn_output, _ = self.attention(query, x, x)
+        output = self.linear(attn_output)
+        return output
+
+
 class FlattenHead(nn.Module):
     def __init__(self, nf, seq_window, head_dropout=0):
         super().__init__()
@@ -264,18 +287,18 @@ class ALL4ONEFAST(nn.Module):
 
         # outprojection
         if config.task == "forecast":
-            # self.output_projection = FlattenHead(
-            #     nf=(self.patch_nums + self.image_token_nums) * self.seq_len,
-            #     seq_window=self.pred_len,
-            #     head_dropout=config.dropout,
+            # self.output_projection = Mlp(
+            #     in_features=(self.patch_nums + self.image_token_nums) * self.seq_len,
+            #     hidden_features=self.d_model,
+            #     out_features=self.pred_len * self.output_dim,
+            #     drop=config.dropout,
             # ).to(dtype=torch.bfloat16, device=device)
-            self.output_projection = Mlp(
-                in_features=(self.patch_nums + self.image_token_nums) * self.seq_len,
-                hidden_features=self.d_model,
-                out_features=self.pred_len * self.output_dim,
-                drop=config.dropout,
+            # self.flatten = nn.Flatten(start_dim=-2)
+            self.output_projection = AdaptiveFeatureAggregation(
+                llm_dim=config.llm_dim,
+                num_heads=config.n_heads,
+                output_dim=config.pred_len,
             ).to(dtype=torch.bfloat16, device=device)
-            self.flatten = nn.Flatten(start_dim=-2)
 
         self.normalize_layers = Normalize(config.enc_in, affine=False)
 
@@ -309,6 +332,8 @@ class ALL4ONEFAST(nn.Module):
             max_values_str = str(max_values[b].tolist()[0])
             median_values_str = str(medians[b].tolist()[0])
             prompt_ = (
+                "<|im_start|>system\n"
+                "You are a multimodal time-series analysis expert. Your task is to integrate numerical statistics, temporal patterns, and visual features to make precise predictions.\n<|im_end|>\n"
                 f"<|im_start|>Dataset description: {self.description}"
                 f"Task description: forecast the next {str(self.pred_len)} steps given the previous {str(self.seq_len)} steps information and corresponding image; "
                 "Input statistics: "
@@ -316,7 +341,9 @@ class ALL4ONEFAST(nn.Module):
                 f"max value {max_values_str}, "
                 f"median value {median_values_str}, "
                 f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "
+                "Input image:"
                 "<|vision_start|><|image_pad|><|vision_end|>"
+                "Input time series:"
             )
 
             prompt.append(prompt_)
@@ -419,14 +446,17 @@ class ALL4ONEFAST(nn.Module):
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
         # using image tokens and x_enc tokens as output dim
-        dec_out = dec_out[
-            :, -(image_token_nums[0] + self.patch_nums + 1) : -1, : self.seq_len
-        ]
+        # dec_out = dec_out[
+        #     :, -(image_token_nums[0] + self.patch_nums + 1) : -1, : self.seq_len
+        # ]
 
-        # output projection
-        dec_out = self.output_projection(self.flatten(dec_out)).unsqueeze(
-            -1
-        )  # [B, pred_len, output_dim]
+        # # output projection
+        # dec_out = self.output_projection(self.flatten(dec_out)).unsqueeze(
+        #     -1
+        # )  # [B, pred_len, output_dim]
+        dec_out = self.output_projection(dec_out).transpose(
+            1, 2
+        )  # [B,  pred_len, output_dim]
         # residual connection
         dec_out = dec_out + x_enc_residual
         dec_out = self.normalize_layers(dec_out, "denorm")
