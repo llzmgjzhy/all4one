@@ -77,7 +77,7 @@ def main(config):
     ]
     optimizer = optim_class(
         [
-            {"params": residual_params, "lr": config.lr / 100},
+            {"params": residual_params, "lr": config.lr / 1e2},
             {"params": other_params, "lr": config.lr},
         ]
     )

@@ -85,6 +85,55 @@ class AdaptiveFeatureAggregation(nn.Module):
         return output
 
 
+class CrossAttention(nn.Module):
+    def __init__(self, llm_dim, num_heads, dropout=0.0):
+        super(CrossAttention, self).__init__()
+        self.llm_dim = llm_dim
+        self.num_heads = num_heads
+
+        self.attention = nn.MultiheadAttention(
+            embed_dim=self.llm_dim, num_heads=self.num_heads, dropout=dropout
+        )
+
+    def forward(self, x, content):
+        B, T, N = x.shape
+        attn_output, _ = self.attention(query=x, key=content, value=content)
+        return attn_output
+
+
+class TemporalAwareAggregation(nn.Module):
+    def __init__(self, llm_dim, num_heads, output_dim, pred_len, dropout=0.0):
+        super().__init__()
+        self.temporal_pe = nn.Parameter(
+            torch.randn(1, pred_len, llm_dim)
+        )  # temporal position embedding
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=llm_dim, num_heads=num_heads, batch_first=True, dropout=dropout
+        )
+        self.gated_fusion = nn.Sequential(nn.Linear(2 * llm_dim, llm_dim), nn.Sigmoid())
+        self.output_proj = nn.Linear(llm_dim, output_dim)
+
+        self.output_dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # x: [B, T, D]
+        B, T, D = x.shape
+
+        # temporal aware embedding
+        queries = self.temporal_pe.expand(B, -1, -1)  # [B, seq_len, D]
+
+        # cross attention aggregation
+        attn_out, _ = self.cross_attn(query=queries, key=x, value=x)
+
+        # gated residual connection
+        fused = (
+            self.gated_fusion(torch.cat([attn_out, queries], dim=-1)) * attn_out
+            + queries
+        )
+
+        return self.output_proj(self.output_dropout(fused))
+
+
 class FlattenHead(nn.Module):
     def __init__(self, nf, seq_window, head_dropout=0):
         super().__init__()
@@ -269,6 +318,11 @@ class ALL4ONEFAST(nn.Module):
         self.ts2vec_embedding = PatchEmbedding(
             config.llm_dim, config.patch_size, config.stride, config.dropout
         ).to(dtype=torch.bfloat16, device=device)
+        self.ts_reprogramming = CrossAttention(
+            llm_dim=config.llm_dim,
+            num_heads=config.n_heads,
+            dropout=config.dropout,
+        ).to(dtype=torch.bfloat16, device=device)
         self.patch_nums = int((config.seq_len - self.patch_size) / self.stride + 2)
 
         # residual embedding, token embed on x_enc, and llm output will be added, speed up training
@@ -287,17 +341,17 @@ class ALL4ONEFAST(nn.Module):
 
         # outprojection
         if config.task == "forecast":
-            # self.output_projection = Mlp(
-            #     in_features=(self.patch_nums + self.image_token_nums) * self.seq_len,
-            #     hidden_features=self.d_model,
-            #     out_features=self.pred_len * self.output_dim,
-            #     drop=config.dropout,
+            # self.output_projection = AdaptiveFeatureAggregation(
+            #     llm_dim=config.llm_dim,
+            #     num_heads=config.n_heads,
+            #     output_dim=config.pred_len,
             # ).to(dtype=torch.bfloat16, device=device)
-            # self.flatten = nn.Flatten(start_dim=-2)
-            self.output_projection = AdaptiveFeatureAggregation(
+            self.output_projection = TemporalAwareAggregation(
                 llm_dim=config.llm_dim,
                 num_heads=config.n_heads,
-                output_dim=config.pred_len,
+                output_dim=config.output_dim,
+                pred_len=self.pred_len,
+                dropout=config.dropout,
             ).to(dtype=torch.bfloat16, device=device)
 
         self.normalize_layers = Normalize(config.enc_in, affine=False)
@@ -318,24 +372,16 @@ class ALL4ONEFAST(nn.Module):
             -1
         )  # [B, pred_len, N]
 
-        # statistics prompt
-        x_enc = x_enc.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)
-
-        prompt = []
-        for b in range(x_enc.shape[0]):
-            prompt_ = (
-                "<|im_start|>system\n"
-                "You are a multimodal time-series analysis expert. Your task is to integrate temporal patterns, and visual features to make precise predictions.\n<|im_end|>\n"
-                f"<|im_start|>Dataset description: {self.description}"
-                f"Task description: forecast the next {str(self.pred_len)} steps given the previous {str(self.seq_len)} steps information and corresponding image; "
-                "Input image:"
-                "<|vision_start|><|image_pad|><|vision_end|>"
-                "Input time series:"
-            )
-
-            prompt.append(prompt_)
-
-        x_enc = x_enc.reshape(B, N, T).permute(0, 2, 1).contiguous()
+        prompt_template = (
+            "<|im_start|>system\n"
+            "You are a multimodal time-series analysis expert. Your task is to integrate temporal patterns, and visual features to make precise predictions.\n<|im_end|>\n"
+            f"<|im_start|>Dataset description: {self.description}"
+            f"Task description: forecast the next {str(self.pred_len)} steps given the previous {str(self.seq_len)} steps information and corresponding image; "
+            "Input image:"
+            "<|vision_start|><|image_pad|><|vision_end|>"
+            "Input time series:"
+        )
+        prompt = [prompt_template for _ in range(x_enc.shape[0])]
 
         # check cache
         cache_file = os.path.join(self.cache_dir, f"{stage}_{batch_idx}.pt")
@@ -413,6 +459,9 @@ class ALL4ONEFAST(nn.Module):
         x_enc_embed, n_vars = self.ts2vec_embedding(
             x_enc.permute(0, 2, 1)
         )  # [B, patch_nums, llm_dim]
+        x_enc_embed = self.ts_reprogramming(
+            x_enc_embed.transpose(0, 1), images_embeds.transpose(0, 1)
+        ).transpose(0, 1)
 
         # prompt add image
         mask_image = prompt == self.model.config.image_token_id
@@ -432,14 +481,8 @@ class ALL4ONEFAST(nn.Module):
             [prompt_embeddings, x_enc_embed, im_end_embed], dim=1
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
-        # using image tokens and x_enc tokens as output dim
-        # dec_out = dec_out[
-        #     :, -(image_token_nums[0] + self.patch_nums + 1) : -1, : self.seq_len
-        # ]
 
-        dec_out = self.output_projection(dec_out).transpose(
-            1, 2
-        )  # [B,  pred_len, output_dim]
+        dec_out = self.output_projection(dec_out)  # [B,  pred_len, output_dim]
         # residual connection
         dec_out = dec_out + x_enc_residual
         dec_out = self.normalize_layers(dec_out, "denorm")
