@@ -321,26 +321,13 @@ class ALL4ONEFAST(nn.Module):
         # statistics prompt
         x_enc = x_enc.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)
 
-        min_values = torch.min(x_enc, dim=1)[0]
-        max_values = torch.max(x_enc, dim=1)[0]
-        medians = torch.median(x_enc, dim=1).values
-        trends = x_enc.diff(dim=1).sum(dim=1)
-
         prompt = []
         for b in range(x_enc.shape[0]):
-            min_values_str = str(min_values[b].tolist()[0])
-            max_values_str = str(max_values[b].tolist()[0])
-            median_values_str = str(medians[b].tolist()[0])
             prompt_ = (
                 "<|im_start|>system\n"
-                "You are a multimodal time-series analysis expert. Your task is to integrate numerical statistics, temporal patterns, and visual features to make precise predictions.\n<|im_end|>\n"
+                "You are a multimodal time-series analysis expert. Your task is to integrate temporal patterns, and visual features to make precise predictions.\n<|im_end|>\n"
                 f"<|im_start|>Dataset description: {self.description}"
                 f"Task description: forecast the next {str(self.pred_len)} steps given the previous {str(self.seq_len)} steps information and corresponding image; "
-                "Input statistics: "
-                f"min value {min_values_str}, "
-                f"max value {max_values_str}, "
-                f"median value {median_values_str}, "
-                f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "
                 "Input image:"
                 "<|vision_start|><|image_pad|><|vision_end|>"
                 "Input time series:"
@@ -450,10 +437,6 @@ class ALL4ONEFAST(nn.Module):
         #     :, -(image_token_nums[0] + self.patch_nums + 1) : -1, : self.seq_len
         # ]
 
-        # # output projection
-        # dec_out = self.output_projection(self.flatten(dec_out)).unsqueeze(
-        #     -1
-        # )  # [B, pred_len, output_dim]
         dec_out = self.output_projection(dec_out).transpose(
             1, 2
         )  # [B,  pred_len, output_dim]
