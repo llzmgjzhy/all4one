@@ -63,7 +63,7 @@ class Mlp(nn.Module):
 
 
 class AdaptiveFeatureAggregation(nn.Module):
-    def __init__(self, llm_dim, num_heads, output_dim):
+    def __init__(self, llm_dim, num_heads, pred_len, output_dim, dropout=0.0):
         super().__init__()
         self.llm_dim = llm_dim
         self.num_heads = num_heads
@@ -73,16 +73,17 @@ class AdaptiveFeatureAggregation(nn.Module):
             embed_dim=self.llm_dim, num_heads=self.num_heads, batch_first=True
         )
 
-        self.query = nn.Parameter(torch.randn(1, 1, self.llm_dim))
+        self.query = nn.Parameter(torch.randn(1, pred_len, self.llm_dim))
 
         self.linear = nn.Linear(self.llm_dim, self.output_dim)
+        self.output_dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         B, T, N = x.shape
         query = self.query.expand(B, -1, -1)
         attn_output, _ = self.attention(query, x, x)
         output = self.linear(attn_output)
-        return output
+        return self.output_dropout(output)
 
 
 class CrossAttention(nn.Module):
@@ -92,7 +93,7 @@ class CrossAttention(nn.Module):
         self.num_heads = num_heads
 
         self.attention = nn.MultiheadAttention(
-            embed_dim=self.llm_dim, num_heads=self.num_heads, dropout=dropout
+            embed_dim=self.llm_dim, num_heads=self.num_heads
         )
 
     def forward(self, x, content):
@@ -108,7 +109,7 @@ class TemporalAwareAggregation(nn.Module):
             torch.randn(1, pred_len, llm_dim)
         )  # temporal position embedding
         self.cross_attn = nn.MultiheadAttention(
-            embed_dim=llm_dim, num_heads=num_heads, batch_first=True, dropout=dropout
+            embed_dim=llm_dim, num_heads=num_heads, batch_first=True
         )
         self.gated_fusion = nn.Sequential(nn.Linear(2 * llm_dim, llm_dim), nn.Sigmoid())
         self.output_proj = nn.Linear(llm_dim, output_dim)
@@ -338,21 +339,25 @@ class ALL4ONEFAST(nn.Module):
             ].items()
         }
         self.x_enc_residual_embed.load_state_dict(x_enc_residual_embed_params)
+        for param in self.x_enc_residual_embed.parameters():
+            param.requires_grad = False
 
         # outprojection
         if config.task == "forecast":
-            # self.output_projection = AdaptiveFeatureAggregation(
-            #     llm_dim=config.llm_dim,
-            #     num_heads=config.n_heads,
-            #     output_dim=config.pred_len,
-            # ).to(dtype=torch.bfloat16, device=device)
-            self.output_projection = TemporalAwareAggregation(
+            self.output_projection = AdaptiveFeatureAggregation(
                 llm_dim=config.llm_dim,
                 num_heads=config.n_heads,
+                pred_len=config.pred_len,
                 output_dim=config.output_dim,
-                pred_len=self.pred_len,
                 dropout=config.dropout,
             ).to(dtype=torch.bfloat16, device=device)
+            # self.output_projection = TemporalAwareAggregation(
+            #     llm_dim=config.llm_dim,
+            #     num_heads=config.n_heads,
+            #     output_dim=config.output_dim,
+            #     pred_len=self.pred_len,
+            #     dropout=config.dropout,
+            # ).to(dtype=torch.bfloat16, device=device)
 
         self.normalize_layers = Normalize(config.enc_in, affine=False)
 

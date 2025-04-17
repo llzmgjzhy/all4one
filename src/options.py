@@ -155,7 +155,10 @@ class Options(object):
             help="Evaluate on validation set every this many epochs. Must be >= 1.",
         )
         self.parser.add_argument(
-            "--optimizer", choices={"Adam", "RAdam"}, default="Adam", help="Optimizer"
+            "--optimizer",
+            choices={"Adam", "AdamW", "RAdam"},
+            default="Adam",
+            help="Optimizer",
         )
         self.parser.add_argument(
             "--patience", type=int, default=3, help="early stopping patience"

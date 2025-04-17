@@ -71,16 +71,7 @@ def main(config):
 
     # initialize the optimizer
     optim_class = get_optimizer(config.optimizer)
-    residual_params = list(model.x_enc_residual_embed.parameters())
-    other_params = [
-        p for p in model.parameters() if not any(p is pp for pp in residual_params)
-    ]
-    optimizer = optim_class(
-        [
-            {"params": residual_params, "lr": config.lr / 1e2},
-            {"params": other_params, "lr": config.lr},
-        ]
-    )
+    optimizer = optim_class(model.parameters(), lr=config.lr)
 
     # loss criterion
     loss_module = get_loss_module(config)
