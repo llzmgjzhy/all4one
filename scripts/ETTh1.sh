@@ -7,7 +7,7 @@ model=ALL4ONEFAST
 # model=ALL4ONEonlyTS2VEC
 batch_size=32
 output_dim=1
-epochs=15
+epochs=5
 
 for percent in 100
 do

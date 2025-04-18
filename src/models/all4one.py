@@ -36,6 +36,26 @@ class SwiGLUMLP(nn.Module):
         return down_proj
 
 
+class Qwen2RMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        Qwen2RMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * hidden_states.to(input_dtype)
+
+    def extra_repr(self):
+        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+
+
 class Mlp(nn.Module):
     def __init__(
         self,
@@ -69,21 +89,39 @@ class AdaptiveFeatureAggregation(nn.Module):
         self.num_heads = num_heads
         self.output_dim = output_dim
 
+        self.base_proj = nn.Linear(
+            in_features=self.output_dim, out_features=self.llm_dim
+        )
+
         self.attention = nn.MultiheadAttention(
             embed_dim=self.llm_dim, num_heads=self.num_heads, batch_first=True
         )
 
-        self.query = nn.Parameter(torch.randn(1, pred_len, self.llm_dim))
+        self.mlp = SwiGLUMLP(
+            in_features=self.llm_dim,
+            hidden_features=self.llm_dim // 4,
+        )
+        self.input_norm = Qwen2RMSNorm(self.llm_dim, eps=1e-06)
+        self.output_norm = Qwen2RMSNorm(self.llm_dim, eps=1e-06)
 
-        self.linear = nn.Linear(self.llm_dim, self.output_dim)
-        self.output_dropout = nn.Dropout(dropout)
+        self.output_mlp = Mlp(
+            in_features=self.llm_dim,
+            hidden_features=self.llm_dim // 2,
+            out_features=self.output_dim,
+            act_layer=nn.GELU,
+            drop=dropout,
+        )
 
-    def forward(self, x):
+    def forward(self, x, y_base):
         B, T, N = x.shape
-        query = self.query.expand(B, -1, -1)
-        attn_output, _ = self.attention(query, x, x)
-        output = self.linear(attn_output)
-        return self.output_dropout(output)
+        query = self.base_proj(y_base)  # [B, pred_len, llm_dim]
+        query_norm = self.input_norm(query)
+        attn_output, _ = self.attention(query_norm, x, x)
+        x = attn_output
+
+        x_delta = x + self.mlp(self.output_norm(x))
+        # x_delta = self.output_norm(x_delta)
+        return self.output_mlp(x_delta)  # [B, pred_len, output_dim]
 
 
 class CrossAttention(nn.Module):
@@ -95,11 +133,20 @@ class CrossAttention(nn.Module):
         self.attention = nn.MultiheadAttention(
             embed_dim=self.llm_dim, num_heads=self.num_heads
         )
+        self.input_norm = Qwen2RMSNorm(self.llm_dim, eps=1e-06)
+        self.output_norm = Qwen2RMSNorm(self.llm_dim, eps=1e-06)
+        self.mlp = SwiGLUMLP(
+            in_features=self.llm_dim,
+            hidden_features=self.llm_dim // 4,
+        )
 
     def forward(self, x, content):
         B, T, N = x.shape
+        x = self.input_norm(x)
         attn_output, _ = self.attention(query=x, key=content, value=content)
-        return attn_output
+
+        x = attn_output + self.mlp(self.output_norm(attn_output))
+        return x
 
 
 class TemporalAwareAggregation(nn.Module):
@@ -487,7 +534,9 @@ class ALL4ONEFAST(nn.Module):
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
 
-        dec_out = self.output_projection(dec_out)  # [B,  pred_len, output_dim]
+        dec_out = self.output_projection(
+            dec_out, x_enc_residual
+        )  # [B,  pred_len, output_dim]
         # residual connection
         dec_out = dec_out + x_enc_residual
         dec_out = self.normalize_layers(dec_out, "denorm")
