@@ -397,20 +397,25 @@ class ALL4ONEFAST(nn.Module):
 
         # outprojection
         if config.task == "forecast":
-            self.output_projection = AdaptiveFeatureAggregation(
-                llm_dim=config.llm_dim,
-                num_heads=config.n_heads,
-                d_ff=config.d_ff,
-                output_dim=config.output_dim,
-                dropout=config.dropout,
-            ).to(dtype=torch.bfloat16, device=device)
-            # self.output_projection = TemporalAwareAggregation(
+            # self.output_projection = AdaptiveFeatureAggregation(
             #     llm_dim=config.llm_dim,
             #     num_heads=config.n_heads,
+            #     d_ff=config.d_ff,
             #     output_dim=config.output_dim,
-            #     pred_len=self.pred_len,
             #     dropout=config.dropout,
             # ).to(dtype=torch.bfloat16, device=device)
+            self.y_base_embed = TokenEmbedding(
+                c_in=config.output_dim,
+                d_model=config.d_model,
+            ).to(dtype=torch.bfloat16, device=device)
+            self.output_projection = ReprogrammingLayer(
+                d_model=config.d_model,
+                n_heads=config.n_heads,
+                d_keys=config.d_ff,
+                d_llm=self.d_llm,
+                output_dim=config.output_dim,
+                attention_dropout=config.dropout,
+            ).to(dtype=torch.bfloat16, device=device)
 
         self.normalize_layers = Normalize(config.enc_in, affine=False)
 
@@ -558,9 +563,13 @@ class ALL4ONEFAST(nn.Module):
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
 
+        y_base = self.y_base_embed(x_enc_residual)
         dec_out = self.output_projection(
-            dec_out, x_enc_residual
+            y_base, dec_out, dec_out
         )  # [B,  pred_len, output_dim]
+        # dec_out = self.output_projection(
+        #     dec_out, x_enc_residual
+        # )  # [B,  pred_len, output_dim]
         # residual connection
         dec_out = dec_out + x_enc_residual
         dec_out = self.normalize_layers(dec_out, "denorm")
@@ -616,7 +625,13 @@ class ALL4ONEonlyTS2VEC(nn.Module):
 
 class ReprogrammingLayer(nn.Module):
     def __init__(
-        self, d_model, n_heads, d_keys=None, d_llm=None, attention_dropout=0.1
+        self,
+        d_model,
+        n_heads,
+        d_keys=None,
+        d_llm=None,
+        output_dim=None,
+        attention_dropout=0.1,
     ):
         super(ReprogrammingLayer, self).__init__()
 
@@ -625,7 +640,8 @@ class ReprogrammingLayer(nn.Module):
         self.query_projection = nn.Linear(d_model, d_keys * n_heads)
         self.key_projection = nn.Linear(d_llm, d_keys * n_heads)
         self.value_projection = nn.Linear(d_llm, d_keys * n_heads)
-        self.out_projection = nn.Linear(d_keys * n_heads, d_llm)
+        output_dim = output_dim if output_dim else d_llm
+        self.out_projection = nn.Linear(d_keys * n_heads, output_dim)
         self.n_heads = n_heads
         self.dropout = nn.Dropout(attention_dropout)
 
