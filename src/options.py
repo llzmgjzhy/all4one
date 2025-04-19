@@ -157,7 +157,7 @@ class Options(object):
         self.parser.add_argument(
             "--optimizer",
             choices={"Adam", "AdamW", "RAdam"},
-            default="Adam",
+            default="AdamW",
             help="Optimizer",
         )
         self.parser.add_argument(

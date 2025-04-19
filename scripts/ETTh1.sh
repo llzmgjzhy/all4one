@@ -33,7 +33,7 @@ python ./src/main_long_forecast.py \
     --lradj 'COS' \
     --lr $lr \
     --epochs $epochs \
-    --d_model 768 \
+    --d_model 32 \
     --n_heads 8 \
     --d_ff 128 \
     --dropout 0.1 \

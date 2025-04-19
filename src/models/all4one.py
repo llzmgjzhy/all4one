@@ -9,7 +9,6 @@ from transformers import (
 from einops import rearrange
 from models.ts2vec import TS2Vec
 from math import sqrt
-from models.TimeLLM import ReprogrammingLayer
 from models.embed import TokenEmbedding, PatchEmbedding
 from layers.StandardNorm import Normalize
 from models.util import tensor_line_plots
@@ -83,18 +82,24 @@ class Mlp(nn.Module):
 
 
 class AdaptiveFeatureAggregation(nn.Module):
-    def __init__(self, llm_dim, num_heads, pred_len, output_dim, dropout=0.0):
+    def __init__(self, llm_dim, num_heads, d_ff, output_dim, dropout=0.0):
         super().__init__()
         self.llm_dim = llm_dim
         self.num_heads = num_heads
         self.output_dim = output_dim
 
-        self.base_proj = nn.Linear(
-            in_features=self.output_dim, out_features=self.llm_dim
+        self.base_proj = nn.Sequential(
+            nn.Linear(output_dim, d_ff),
+            nn.GELU(),
+            Qwen2RMSNorm(d_ff),
+            nn.Linear(d_ff, llm_dim),
         )
 
         self.attention = nn.MultiheadAttention(
-            embed_dim=self.llm_dim, num_heads=self.num_heads, batch_first=True
+            embed_dim=self.llm_dim,
+            num_heads=self.num_heads,
+            batch_first=True,
+            dropout=dropout,
         )
 
         self.mlp = SwiGLUMLP(
@@ -106,7 +111,7 @@ class AdaptiveFeatureAggregation(nn.Module):
 
         self.output_mlp = Mlp(
             in_features=self.llm_dim,
-            hidden_features=self.llm_dim // 2,
+            hidden_features=self.llm_dim // 4,
             out_features=self.output_dim,
             act_layer=nn.GELU,
             drop=dropout,
@@ -131,7 +136,7 @@ class CrossAttention(nn.Module):
         self.num_heads = num_heads
 
         self.attention = nn.MultiheadAttention(
-            embed_dim=self.llm_dim, num_heads=self.num_heads
+            embed_dim=self.llm_dim, num_heads=self.num_heads, dropout=dropout
         )
         self.input_norm = Qwen2RMSNorm(self.llm_dim, eps=1e-06)
         self.output_norm = Qwen2RMSNorm(self.llm_dim, eps=1e-06)
@@ -327,8 +332,7 @@ class ALL4ONEFAST(nn.Module):
         self.d_ff = config.d_ff
         self.d_llm = config.llm_dim
         self.output_dim = config.output_dim
-        # values determined through experiments
-        self.image_token_nums = 81
+        self.top_k = 5
 
         # dataset
         self.description = config.content
@@ -364,12 +368,14 @@ class ALL4ONEFAST(nn.Module):
 
         # ts2vec embedding align llm input dims
         self.ts2vec_embedding = PatchEmbedding(
-            config.llm_dim, config.patch_size, config.stride, config.dropout
+            config.d_model, config.patch_size, config.stride, config.dropout
         ).to(dtype=torch.bfloat16, device=device)
-        self.ts_reprogramming = CrossAttention(
-            llm_dim=config.llm_dim,
-            num_heads=config.n_heads,
-            dropout=config.dropout,
+        self.ts_reprogramming = ReprogrammingLayer(
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            d_keys=config.d_ff,
+            d_llm=self.d_llm,
+            attention_dropout=config.dropout,
         ).to(dtype=torch.bfloat16, device=device)
         self.patch_nums = int((config.seq_len - self.patch_size) / self.stride + 2)
 
@@ -394,7 +400,7 @@ class ALL4ONEFAST(nn.Module):
             self.output_projection = AdaptiveFeatureAggregation(
                 llm_dim=config.llm_dim,
                 num_heads=config.n_heads,
-                pred_len=config.pred_len,
+                d_ff=config.d_ff,
                 output_dim=config.output_dim,
                 dropout=config.dropout,
             ).to(dtype=torch.bfloat16, device=device)
@@ -413,9 +419,6 @@ class ALL4ONEFAST(nn.Module):
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir, exist_ok=True)
 
-    def get_ts2vec_loss(self, x_enc):
-        return self.ts2vec.fit(x_enc)
-
     def forward(self, x_enc, x_mask, y, y_mask, stage="train", batch_idx=0):
         B, T, N = x_enc.shape
         x_enc = self.normalize_layers(x_enc, "norm")
@@ -424,16 +427,39 @@ class ALL4ONEFAST(nn.Module):
             -1
         )  # [B, pred_len, N]
 
-        prompt_template = (
-            "<|im_start|>system\n"
-            "You are a multimodal time-series analysis expert. Your task is to integrate temporal patterns, and visual features to make precise predictions.\n<|im_end|>\n"
-            f"<|im_start|>Dataset description: {self.description}"
-            f"Task description: forecast the next {str(self.pred_len)} steps given the previous {str(self.seq_len)} steps information and corresponding image; "
-            "Input image:"
-            "<|vision_start|><|image_pad|><|vision_end|>"
-            "Input time series:"
-        )
-        prompt = [prompt_template for _ in range(x_enc.shape[0])]
+        # x_enc statistic
+        x_enc = x_enc.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)
+        min_values = torch.min(x_enc, dim=1)[0]
+        max_values = torch.max(x_enc, dim=1)[0]
+        medians = torch.median(x_enc, dim=1).values
+        lags = self.calcute_lags(x_enc.float())
+        trends = x_enc.diff(dim=1).sum(dim=1)
+
+        prompt = []
+        for b in range(x_enc.shape[0]):
+            min_values_str = str(min_values[b].tolist()[0])
+            max_values_str = str(max_values[b].tolist()[0])
+            median_values_str = str(medians[b].tolist()[0])
+            lags_values_str = str(lags[b].tolist())
+            prompt_ = (
+                "<|im_start|>system\n"
+                "You are a multimodal time-series analysis expert. Your task is to integrate temporal patterns, and visual features to make precise predictions.\n<|im_end|>\n"
+                f"<|im_start|>Dataset description: {self.description}"
+                f"Task description: forecast the next {str(self.pred_len)} steps given the previous {str(self.seq_len)} steps information and corresponding image; "
+                "Input statistics: "
+                f"min value {min_values_str}, "
+                f"max value {max_values_str}, "
+                f"median value {median_values_str}, "
+                f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "
+                f"top 5 lags are : {lags_values_str}\n"
+                "Input image:"
+                "<|vision_start|><|image_pad|><|vision_end|>"
+                "Input time series:"
+            )
+
+            prompt.append(prompt_)
+
+        x_enc = x_enc.reshape(B, N, T).permute(0, 2, 1).contiguous()
 
         # check cache
         cache_file = os.path.join(self.cache_dir, f"{stage}_{batch_idx}.pt")
@@ -509,11 +535,9 @@ class ALL4ONEFAST(nn.Module):
 
         # x_enc embedding
         x_enc_embed, n_vars = self.ts2vec_embedding(
-            x_enc.permute(0, 2, 1)
+            x_enc.permute(0, 2, 1).contiguous()
         )  # [B, patch_nums, llm_dim]
-        x_enc_embed = self.ts_reprogramming(
-            x_enc_embed.transpose(0, 1), images_embeds.transpose(0, 1)
-        ).transpose(0, 1)
+        x_enc_embed = self.ts_reprogramming(x_enc_embed, images_embeds, images_embeds)
 
         # prompt add image
         mask_image = prompt == self.model.config.image_token_id
@@ -542,6 +566,15 @@ class ALL4ONEFAST(nn.Module):
         dec_out = self.normalize_layers(dec_out, "denorm")
 
         return dec_out
+
+    def calcute_lags(self, x_enc):
+        q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+        k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+        res = q_fft * torch.conj(k_fft)
+        corr = torch.fft.irfft(res, dim=-1)
+        mean_value = torch.mean(corr, dim=1)
+        _, lags = torch.topk(mean_value, self.top_k, dim=-1)
+        return lags
 
 
 class ALL4ONEonlyTS2VEC(nn.Module):
@@ -579,3 +612,46 @@ class ALL4ONEonlyTS2VEC(nn.Module):
         dec_out = self.normalize_layers(dec_out, "denorm")
 
         return dec_out
+
+
+class ReprogrammingLayer(nn.Module):
+    def __init__(
+        self, d_model, n_heads, d_keys=None, d_llm=None, attention_dropout=0.1
+    ):
+        super(ReprogrammingLayer, self).__init__()
+
+        d_keys = d_keys or (d_model // n_heads)
+
+        self.query_projection = nn.Linear(d_model, d_keys * n_heads)
+        self.key_projection = nn.Linear(d_llm, d_keys * n_heads)
+        self.value_projection = nn.Linear(d_llm, d_keys * n_heads)
+        self.out_projection = nn.Linear(d_keys * n_heads, d_llm)
+        self.n_heads = n_heads
+        self.dropout = nn.Dropout(attention_dropout)
+
+    def forward(self, target_embedding, source_embedding, value_embedding):
+        B, L, _ = target_embedding.shape
+        _, S, _ = source_embedding.shape
+        H = self.n_heads
+
+        target_embedding = self.query_projection(target_embedding).view(B, L, H, -1)
+        source_embedding = self.key_projection(source_embedding).view(B, S, H, -1)
+        value_embedding = self.value_projection(value_embedding).view(B, S, H, -1)
+
+        out = self.reprogramming(target_embedding, source_embedding, value_embedding)
+
+        out = out.reshape(B, L, -1)
+
+        return self.out_projection(out)
+
+    def reprogramming(self, target_embedding, source_embedding, value_embedding):
+        B, L, H, E = target_embedding.shape
+
+        scale = 1.0 / sqrt(E)
+
+        scores = torch.einsum("blhe,bshe->bhls", target_embedding, source_embedding)
+
+        A = self.dropout(torch.softmax(scale * scores, dim=-1))
+        reprogramming_embedding = torch.einsum("bhls,bshe->blhe", A, value_embedding)
+
+        return reprogramming_embedding
