@@ -457,9 +457,9 @@ class ALL4ONEFAST(nn.Module):
                 f"median value {median_values_str}, "
                 f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "
                 f"top 5 lags are : {lags_values_str}\n"
-                "Input image:"
+                "Image input:"
                 "<|vision_start|><|image_pad|><|vision_end|>"
-                "Input time series:"
+                "Time series input:"
             )
 
             prompt.append(prompt_)
@@ -552,16 +552,28 @@ class ALL4ONEFAST(nn.Module):
 
         prompt_embeddings = prompt_embeddings.masked_scatter(image_mask, images_embeds)
 
-        # add <im_end> embed
-        im_end_token_id = self.model.config.eos_token_id
-        im_end_token_id_tensor = torch.tensor([im_end_token_id], device=x_enc.device)
-        im_end_embed = self.llm_model.get_input_embeddings()(im_end_token_id_tensor)
-        im_end_embed = im_end_embed.unsqueeze(0).expand(B, 1, -1).contiguous()
+        # add <im_end> and assitant embed
+        im_end_prompt = "<|im_end|>\n<|im_start|>assistant\n"
+        im_end_prompt = (
+            self.tokenizer(
+                im_end_prompt,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=2048,
+            )
+            .to(device=x_enc.device)
+            .input_ids
+        )
+        im_end_embed = self.llm_model.get_input_embeddings()(im_end_prompt)
+        im_end_embed = im_end_embed.expand(B, -1, -1).contiguous()
 
         llm_enc_out = torch.cat(
             [prompt_embeddings, x_enc_embed, im_end_embed], dim=1
         )  # [B, token_num , llm_dim]
-        dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
+        dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state[
+            :, -self.patch_nums :, :
+        ]
 
         y_base = self.y_base_embed(x_enc_residual)
         dec_out = self.output_projection(
