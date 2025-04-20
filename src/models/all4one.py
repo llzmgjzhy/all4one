@@ -397,25 +397,23 @@ class ALL4ONEFAST(nn.Module):
 
         # outprojection
         if config.task == "forecast":
-            # self.output_projection = AdaptiveFeatureAggregation(
-            #     llm_dim=config.llm_dim,
-            #     num_heads=config.n_heads,
-            #     d_ff=config.d_ff,
-            #     output_dim=config.output_dim,
-            #     dropout=config.dropout,
+            self.output_projection = FlattenHead(
+                self.patch_nums * config.d_ff,
+                config.pred_len,
+                head_dropout=config.dropout,
+            ).to(dtype=torch.bfloat16, device=device)
+            # self.y_base_embed = TokenEmbedding(
+            #     c_in=config.output_dim,
+            #     d_model=config.d_model,
             # ).to(dtype=torch.bfloat16, device=device)
-            self.y_base_embed = TokenEmbedding(
-                c_in=config.output_dim,
-                d_model=config.d_model,
-            ).to(dtype=torch.bfloat16, device=device)
-            self.output_projection = ReprogrammingLayer(
-                d_model=config.d_model,
-                n_heads=config.n_heads,
-                d_keys=config.d_ff,
-                d_llm=self.d_llm,
-                output_dim=config.output_dim,
-                attention_dropout=config.dropout,
-            ).to(dtype=torch.bfloat16, device=device)
+            # self.output_projection = ReprogrammingLayer(
+            #     d_model=config.d_model,
+            #     n_heads=config.n_heads,
+            #     d_keys=config.d_ff,
+            #     d_llm=self.d_llm,
+            #     output_dim=config.output_dim,
+            #     attention_dropout=config.dropout,
+            # ).to(dtype=torch.bfloat16, device=device)
 
         self.normalize_layers = Normalize(config.enc_in, affine=False)
 
@@ -572,16 +570,16 @@ class ALL4ONEFAST(nn.Module):
             [prompt_embeddings, x_enc_embed, im_end_embed], dim=1
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state[
-            :, -self.patch_nums :, :
+            :, -self.patch_nums :, : self.d_ff
         ]
 
-        y_base = self.y_base_embed(x_enc_residual)
-        dec_out = self.output_projection(
-            y_base, dec_out, dec_out
-        )  # [B,  pred_len, output_dim]
+        # y_base = self.y_base_embed(x_enc_residual)
         # dec_out = self.output_projection(
-        #     dec_out, x_enc_residual
+        #     y_base, dec_out, dec_out
         # )  # [B,  pred_len, output_dim]
+        dec_out = self.output_projection(dec_out).unsqueeze(
+            -1
+        )  # [B,  pred_len, output_dim]
         # residual connection
         # dec_out = dec_out + x_enc_residual
         dec_out = self.normalize_layers(dec_out, "denorm")
