@@ -129,6 +129,53 @@ class AdaptiveFeatureAggregation(nn.Module):
         return self.output_mlp(x_delta)  # [B, pred_len, output_dim]
 
 
+class FusionReprogrammingLayer(nn.Module):
+    def __init__(
+        self,
+        llm_dim,
+        num_heads,
+        d_model,
+        d_ff,
+        output_dim,
+        hidden_dim=None,
+        dropout=0.0,
+    ):
+        super().__init__()
+        self.llm_dim = llm_dim
+        self.num_heads = num_heads
+        self.output_dim = output_dim
+
+        self.attention = ReprogrammingLayer(
+            d_model=d_model,
+            n_heads=num_heads,
+            d_keys=d_ff,
+            d_llm=llm_dim,
+            output_dim=output_dim,
+            attention_dropout=dropout,
+        )
+
+        self.fc = nn.Sequential(
+            nn.Linear(output_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim),
+            nn.Sigmoid(),
+        )
+        self.norm = nn.LayerNorm(output_dim)
+
+    def forward(self, x, y_base, base):
+        B, T, N = x.shape
+
+        increment = self.attention(y_base, x, x)  # [B, pred_len, output_dim]
+
+        concat_fea = torch.cat(
+            [increment, base], dim=-1
+        )  # [B, pred_len, output_dim * 2]
+        gate = self.fc(concat_fea)  # [B, pred_len, output_dim]
+        fused = increment * gate + (1 - gate) * base  # [B, pred_len, output_dim]
+        fused = self.norm(fused)
+        return fused  # [B, pred_len, output_dim]
+
+
 class CrossAttention(nn.Module):
     def __init__(self, llm_dim, num_heads, dropout=0.0):
         super(CrossAttention, self).__init__()
@@ -408,13 +455,14 @@ class ALL4ONEFAST(nn.Module):
                 c_in=config.output_dim,
                 d_model=config.d_model,
             ).to(dtype=torch.bfloat16, device=device)
-            self.output_projection = ReprogrammingLayer(
+            self.output_projection = FusionReprogrammingLayer(
+                llm_dim=config.llm_dim,
+                num_heads=config.n_heads,
                 d_model=config.d_model,
-                n_heads=config.n_heads,
-                d_keys=config.d_ff,
-                d_llm=self.d_llm,
+                d_ff=config.d_ff,
                 output_dim=config.output_dim,
-                attention_dropout=config.dropout,
+                hidden_dim=config.output_dim * 4,
+                dropout=config.dropout,
             ).to(dtype=torch.bfloat16, device=device)
 
         self.normalize_layers = Normalize(config.enc_in, affine=False)
@@ -451,15 +499,15 @@ class ALL4ONEFAST(nn.Module):
                 "You are a multimodal time-series analysis expert. Your task is to integrate temporal patterns, and visual features to make precise predictions.\n<|im_end|>\n"
                 f"<|im_start|>Dataset description: {self.description}"
                 f"Task description: forecast the next {str(self.pred_len)} steps given the previous {str(self.seq_len)} steps information and corresponding image; "
-                "Input statistics: "
+                "Statistics input: "
                 f"min value {min_values_str}, "
                 f"max value {max_values_str}, "
                 f"median value {median_values_str}, "
                 f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "
                 f"top 5 lags are : {lags_values_str}\n"
-                "Input image:"
+                "Image input:"
                 "<|vision_start|><|image_pad|><|vision_end|>"
-                "Input time series:"
+                "Time series input:"
             )
 
             prompt.append(prompt_)
@@ -552,11 +600,21 @@ class ALL4ONEFAST(nn.Module):
 
         prompt_embeddings = prompt_embeddings.masked_scatter(image_mask, images_embeds)
 
-        # add <im_end> embed
-        im_end_token_id = self.model.config.eos_token_id
-        im_end_token_id_tensor = torch.tensor([im_end_token_id], device=x_enc.device)
-        im_end_embed = self.llm_model.get_input_embeddings()(im_end_token_id_tensor)
-        im_end_embed = im_end_embed.unsqueeze(0).expand(B, 1, -1).contiguous()
+        # add <im_end> and assitant embed
+        im_end_prompt = "<|im_end|>\n<|im_start|>assistant\n"
+        im_end_prompt = (
+            self.tokenizer(
+                im_end_prompt,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=2048,
+            )
+            .to(device=x_enc.device)
+            .input_ids
+        )
+        im_end_embed = self.llm_model.get_input_embeddings()(im_end_prompt)
+        im_end_embed = im_end_embed.expand(B, -1, -1).contiguous()
 
         llm_enc_out = torch.cat(
             [prompt_embeddings, x_enc_embed, im_end_embed], dim=1
@@ -565,7 +623,7 @@ class ALL4ONEFAST(nn.Module):
 
         y_base = self.y_base_embed(x_enc_residual)
         dec_out = self.output_projection(
-            y_base, dec_out, dec_out
+            dec_out, y_base, x_enc_residual
         )  # [B,  pred_len, output_dim]
         # dec_out = self.output_projection(
         #     dec_out, x_enc_residual
