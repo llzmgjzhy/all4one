@@ -571,7 +571,7 @@ class ALL4ONEFAST(nn.Module):
         #     dec_out, x_enc_residual
         # )  # [B,  pred_len, output_dim]
         # residual connection
-        dec_out = dec_out + x_enc_residual
+        # dec_out = dec_out + x_enc_residual
         dec_out = self.normalize_layers(dec_out, "denorm")
 
         return dec_out
