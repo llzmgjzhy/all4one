@@ -153,14 +153,12 @@ class FusionReprogrammingLayer(nn.Module):
             output_dim=output_dim,
             attention_dropout=dropout,
         )
-
-        self.fc = nn.Sequential(
-            nn.Linear(output_dim * 2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim),
-            nn.Sigmoid(),
+        self.fc = Mlp(
+            in_features=output_dim * 2,
+            hidden_features=output_dim * 4,
+            out_features=output_dim,
+            drop=dropout,
         )
-        self.norm = nn.LayerNorm(output_dim)
 
     def forward(self, x, y_base, base):
         B, T, N = x.shape
@@ -170,9 +168,8 @@ class FusionReprogrammingLayer(nn.Module):
         concat_fea = torch.cat(
             [increment, base], dim=-1
         )  # [B, pred_len, output_dim * 2]
-        gate = self.fc(concat_fea)  # [B, pred_len, output_dim]
-        fused = increment * gate + (1 - gate) * base  # [B, pred_len, output_dim]
-        fused = self.norm(fused)
+        fused = self.fc(concat_fea)  # [B, pred_len, output_dim]
+
         return fused  # [B, pred_len, output_dim]
 
 

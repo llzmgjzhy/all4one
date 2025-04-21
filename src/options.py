@@ -170,6 +170,12 @@ class Options(object):
             help="learning rate (default holds for batch size 64)",
         )
         self.parser.add_argument(
+            "--weight_decay",
+            type=float,
+            default=0.0,
+            help="weight decay (L2 penalty) (default: 0.0)",
+        )
+        self.parser.add_argument(
             "--lr_step",
             type=str,
             default="1000000",

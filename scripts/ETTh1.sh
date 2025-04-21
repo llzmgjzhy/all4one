@@ -32,6 +32,7 @@ python ./src/main_long_forecast.py \
     --batch_size $batch_size \
     --lradj 'COS' \
     --lr $lr \
+    --weight_decay 1e-4 \
     --epochs $epochs \
     --d_model 32 \
     --n_heads 8 \

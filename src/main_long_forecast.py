@@ -71,7 +71,9 @@ def main(config):
 
     # initialize the optimizer
     optim_class = get_optimizer(config.optimizer)
-    optimizer = optim_class(model.parameters(), lr=config.lr)
+    optimizer = optim_class(
+        model.parameters(), lr=config.lr, weight_decay=config.weight_decay
+    )
 
     # loss criterion
     loss_module = get_loss_module(config)
