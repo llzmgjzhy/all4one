@@ -153,11 +153,11 @@ class FusionReprogrammingLayer(nn.Module):
             output_dim=output_dim,
             attention_dropout=dropout,
         )
-        self.fc = Mlp(
-            in_features=output_dim * 2,
-            hidden_features=output_dim * 4,
-            out_features=output_dim,
-            drop=dropout,
+        self.fc = nn.Sequential(
+            nn.Linear(2 * output_dim, output_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.LayerNorm(output_dim),
         )
 
     def forward(self, x, y_base, base):
@@ -448,10 +448,13 @@ class ALL4ONEFAST(nn.Module):
             #     output_dim=config.output_dim,
             #     dropout=config.dropout,
             # ).to(dtype=torch.bfloat16, device=device)
-            self.y_base_embed = TokenEmbedding(
-                c_in=config.output_dim,
-                d_model=config.d_model,
-            ).to(dtype=torch.bfloat16, device=device)
+            # self.y_base_embed = TokenEmbedding(
+            #     c_in=config.output_dim,
+            #     d_model=config.d_model,
+            # ).to(dtype=torch.bfloat16, device=device)
+            self.y_base_embed = nn.Linear(config.output_dim, config.d_model).to(
+                dtype=torch.bfloat16, device=device
+            )
             self.output_projection = FusionReprogrammingLayer(
                 llm_dim=config.llm_dim,
                 num_heads=config.n_heads,
