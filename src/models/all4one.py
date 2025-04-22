@@ -137,6 +137,7 @@ class FusionReprogrammingLayer(nn.Module):
         d_model,
         d_ff,
         output_dim,
+        pred_len,
         hidden_dim=None,
         dropout=0.0,
     ):
@@ -153,24 +154,20 @@ class FusionReprogrammingLayer(nn.Module):
             output_dim=output_dim,
             attention_dropout=dropout,
         )
-        self.fc = nn.Sequential(
-            nn.Linear(2 * output_dim, output_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.LayerNorm(output_dim),
-        )
+        self.fc = nn.Linear(in_features=2 * pred_len, out_features=pred_len)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, y_base, base):
         B, T, N = x.shape
 
         increment = self.attention(y_base, x, x)  # [B, pred_len, output_dim]
+        increment = increment.squeeze(-1)
+        base = base.squeeze(-1)
 
-        concat_fea = torch.cat(
-            [increment, base], dim=-1
-        )  # [B, pred_len, output_dim * 2]
-        fused = self.fc(concat_fea)  # [B, pred_len, output_dim]
+        fused = torch.cat([increment, base], dim=-1)  # [B, pred_len, 2 * output_dim]
+        fused = self.fc(fused).unsqueeze(-1)  # [B, pred_len, output_dim]
 
-        return fused  # [B, pred_len, output_dim]
+        return self.dropout(fused)  # [B, pred_len, output_dim]
 
 
 class CrossAttention(nn.Module):
@@ -448,18 +445,16 @@ class ALL4ONEFAST(nn.Module):
             #     output_dim=config.output_dim,
             #     dropout=config.dropout,
             # ).to(dtype=torch.bfloat16, device=device)
-            # self.y_base_embed = TokenEmbedding(
-            #     c_in=config.output_dim,
-            #     d_model=config.d_model,
-            # ).to(dtype=torch.bfloat16, device=device)
-            self.y_base_embed = nn.Linear(config.output_dim, config.d_model).to(
-                dtype=torch.bfloat16, device=device
-            )
+            self.y_base_embed = TokenEmbedding(
+                c_in=config.output_dim,
+                d_model=config.d_model,
+            ).to(dtype=torch.bfloat16, device=device)
             self.output_projection = FusionReprogrammingLayer(
                 llm_dim=config.llm_dim,
                 num_heads=config.n_heads,
                 d_model=config.d_model,
                 d_ff=config.d_ff,
+                pred_len=config.pred_len,
                 output_dim=config.output_dim,
                 hidden_dim=config.output_dim * 4,
                 dropout=config.dropout,
