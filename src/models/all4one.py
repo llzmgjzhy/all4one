@@ -162,14 +162,15 @@ class FusionReprogrammingLayer(nn.Module):
         B, T, N = x.shape
 
         increment = self.attention(y_base, x, x)  # [B, pred_len, output_dim]
-        increment = increment.squeeze(-1)
-        base = base.squeeze(-1)
+        fused = base + increment  # [B, pred_len, output_dim]
+        # increment = increment.squeeze(-1)
+        # base = base.squeeze(-1)
 
-        gate = self.gate.expand(B, -1)
-        # fused = torch.cat([increment, base], dim=-1)  # [B, pred_len, 2 * output_dim]
-        fused = gate * base + (1 - gate) * increment
-        fused = fused.unsqueeze(-1)  # [B, pred_len, output_dim]
-        # [B, pred_len, output_dim]
+        # gate = self.gate.expand(B, -1)
+        # # fused = torch.cat([increment, base], dim=-1)  # [B, pred_len, 2 * output_dim]
+        # fused = gate * base + (1 - gate) * increment
+        # fused = fused.unsqueeze(-1)  # [B, pred_len, output_dim]
+        # # [B, pred_len, output_dim]
 
         return self.dropout(fused)  # [B, pred_len, output_dim]
 

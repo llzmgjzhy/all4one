@@ -198,5 +198,5 @@ def tensor_line_plots(data, height=256, width=256, flip=False):
     images[batch_indices, y_flat, x_flat] = 1.0
 
     images = images.unsqueeze(1)  # [B, 1, height, width]
-    images = images.expand(-1, 3, -1, -1)  # [B, 3, height, width]
+    # images = images.expand(-1, 3, -1, -1)  # [B, 3, height, width]
     return images  # [B, 1, height, width]
