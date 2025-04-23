@@ -40,7 +40,8 @@ python ./src/main_long_forecast.py \
     --dropout 0.1 \
     --enc_in 7 \
     --c_out 7 \
-    --val-interval 1 \
+    --val_interval 1 \
+    --patience 2 \
     --output_dim $output_dim \
     --freq h \
     --img_width 256 \
