@@ -154,25 +154,15 @@ class FusionReprogrammingLayer(nn.Module):
             output_dim=output_dim,
             attention_dropout=dropout,
         )
-        self.fc = nn.Linear(in_features=2 * pred_len, out_features=pred_len)
-        self.gate = nn.Parameter(torch.randn(1, pred_len))
-        self.dropout = nn.Dropout(dropout)
+
 
     def forward(self, x, y_base, base):
         B, T, N = x.shape
 
         increment = self.attention(y_base, x, x)  # [B, pred_len, output_dim]
         fused = base + increment  # [B, pred_len, output_dim]
-        # increment = increment.squeeze(-1)
-        # base = base.squeeze(-1)
 
-        # gate = self.gate.expand(B, -1)
-        # # fused = torch.cat([increment, base], dim=-1)  # [B, pred_len, 2 * output_dim]
-        # fused = gate * base + (1 - gate) * increment
-        # fused = fused.unsqueeze(-1)  # [B, pred_len, output_dim]
-        # # [B, pred_len, output_dim]
-
-        return self.dropout(fused)  # [B, pred_len, output_dim]
+        return fused  # [B, pred_len, output_dim]
 
 
 class CrossAttention(nn.Module):
