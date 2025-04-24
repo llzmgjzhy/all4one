@@ -151,28 +151,25 @@ class FusionReprogrammingLayer(nn.Module):
             n_heads=num_heads,
             d_keys=d_ff,
             d_llm=llm_dim,
-            output_dim=output_dim,
+            output_dim=d_model,
             attention_dropout=dropout,
         )
-        self.gate = Mlp(
-            in_features=pred_len,
-            hidden_features=pred_len * 2,
-            out_features=pred_len,
-            act_layer=nn.GELU,
-            drop=dropout,
+        self.tokenEmbed = TokenEmbedding(
+            c_in=d_model,
+            d_model=output_dim,
         )
+        self.norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, y_base, base):
         B, T, N = x.shape
 
         increment = self.attention(y_base, x, x)  # [B, pred_len, output_dim]
 
-        increment = self.gate(increment.squeeze(-1)).unsqueeze(
-            -1
-        )  # [B, pred_len, output_dim]
+        increment = self.tokenEmbed(self.norm(increment))  # [B, pred_len, output_dim]
         fused = base + increment  # [B, pred_len, output_dim]
 
-        return fused  # [B, pred_len, output_dim]
+        return self.dropout(fused)  # [B, pred_len, output_dim]
 
 
 class CrossAttention(nn.Module):
