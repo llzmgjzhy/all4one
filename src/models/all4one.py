@@ -154,23 +154,21 @@ class FusionReprogrammingLayer(nn.Module):
             output_dim=output_dim,
             attention_dropout=dropout,
         )
-        self.gate = nn.Sequential(
-            nn.Linear(output_dim * 2, output_dim),
-            nn.Sigmoid(),
+        self.gate = Mlp(
+            in_features=pred_len,
+            hidden_features=pred_len * 2,
+            out_features=pred_len,
+            act_layer=nn.GELU,
+            drop=dropout,
         )
-        self.norm = nn.LayerNorm(output_dim)
-        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, y_base, base):
         B, T, N = x.shape
 
         increment = self.attention(y_base, x, x)  # [B, pred_len, output_dim]
-        fused_input = torch.cat(
-            [increment, base], dim=-1
-        )  # [B, pred_len, 2 * output_dim]
-        gate = self.gate(fused_input)  # [B, pred_len, output_dim]
-        increment = self.dropout(
-            self.norm(gate * increment)
+
+        increment = self.gate(increment.squeeze(-1)).unsqueeze(
+            -1
         )  # [B, pred_len, output_dim]
         fused = base + increment  # [B, pred_len, output_dim]
 
