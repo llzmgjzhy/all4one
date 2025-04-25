@@ -3,11 +3,12 @@ export CUDA_VISIBLE_DEVICES=0
 
 seq_len=512
 # model=ALL4ONE
-model=ALL4ONEFAST
+# model=ALL4ONEFAST
+model=ALL4ONEABLATION
 # model=ALL4ONEonlyTS2VEC
 batch_size=24
 output_dim=1
-epochs=10
+epochs=20
 
 for percent in 100
 do
@@ -32,7 +33,7 @@ python ./src/main_long_forecast.py \
     --batch_size $batch_size \
     --lradj 'COS' \
     --lr $lr \
-    --weight_decay 1e-5 \
+    --weight_decay 1e-4 \
     --epochs $epochs \
     --d_model 32 \
     --n_heads 8 \
@@ -50,7 +51,7 @@ python ./src/main_long_forecast.py \
     --stride 8 \
     --percent $percent \
     --llm_layer 6 \
-    --llm_dim 3584 \
+    --llm_dim 2048 \
     --itr 1 \
     --model_name $model \
     --loss mse \

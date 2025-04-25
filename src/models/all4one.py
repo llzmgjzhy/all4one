@@ -166,10 +166,12 @@ class FusionReprogrammingLayer(nn.Module):
 
         increment = self.attention(y_base, x, x)  # [B, pred_len, output_dim]
 
-        increment = self.tokenEmbed(self.norm(increment))  # [B, pred_len, output_dim]
+        increment = self.dropout(
+            self.tokenEmbed(self.norm(increment))
+        )  # [B, pred_len, output_dim]
         fused = base + increment  # [B, pred_len, output_dim]
 
-        return self.dropout(fused)  # [B, pred_len, output_dim]
+        return fused  # [B, pred_len, output_dim]
 
 
 class CrossAttention(nn.Module):
@@ -382,7 +384,7 @@ class ALL4ONEFAST(nn.Module):
 
         # model
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            "Qwen/Qwen2.5-VL-7B-Instruct",
+            "Qwen/Qwen2.5-VL-3B-Instruct",
             attn_implementation="flash_attention_2",
             torch_dtype=torch.bfloat16,
         ).to(device=device)
@@ -615,6 +617,282 @@ class ALL4ONEFAST(nn.Module):
 
         llm_enc_out = torch.cat(
             [prompt_embeddings, x_enc_embed, im_end_embed], dim=1
+        )  # [B, token_num , llm_dim]
+        dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
+
+        y_base = self.y_base_embed(x_enc_residual)
+        dec_out = self.output_projection(
+            dec_out, y_base, x_enc_residual
+        )  # [B,  pred_len, output_dim]
+        # dec_out = self.output_projection(
+        #     dec_out, x_enc_residual
+        # )  # [B,  pred_len, output_dim]
+        # residual connection
+        # dec_out = dec_out + x_enc_residual
+        dec_out = self.normalize_layers(dec_out, "denorm")
+
+        return dec_out
+
+    def calcute_lags(self, x_enc):
+        q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+        k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+        res = q_fft * torch.conj(k_fft)
+        corr = torch.fft.irfft(res, dim=-1)
+        mean_value = torch.mean(corr, dim=1)
+        _, lags = torch.topk(mean_value, self.top_k, dim=-1)
+        return lags
+
+
+class ALL4ONEABLATION(nn.Module):
+    def __init__(self, config, device):
+        super(ALL4ONEABLATION, self).__init__()
+        self.seq_len = config.seq_len
+        self.pred_len = config.pred_len
+        self.patch_size = config.patch_size
+        self.stride = config.stride
+        self.d_model = config.d_model
+        self.d_ff = config.d_ff
+        self.d_llm = config.llm_dim
+        self.output_dim = config.output_dim
+        self.top_k = 5
+
+        # dataset
+        self.description = config.content
+
+        # model
+        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            "Qwen/Qwen2.5-VL-3B-Instruct",
+            attn_implementation="flash_attention_2",
+            torch_dtype=torch.bfloat16,
+        ).to(device=device)
+        for param in self.model.parameters():
+            param.requires_grad = False
+        self.llm_model = self.model.model
+
+        # visual module
+        self.visual = self.model.visual
+        self.image_processor = Qwen2VLImageProcessorFast()
+        self.merge_length = self.image_processor.merge_size**2
+
+        # processor
+        self.tokenizer = Qwen2_5_VLProcessor.from_pretrained(
+            "Qwen/Qwen2.5-VL-7B-Instruct",
+            attn_implementation="flash_attention_2",
+            torch_dtype=torch.bfloat16,
+            use_fast=True,
+        ).tokenizer
+
+        self.image_token = (
+            "<|image_pad|>"
+            if not hasattr(self.tokenizer, "image_token")
+            else self.tokenizer.image_token
+        )
+
+        # ts2vec embedding align llm input dims
+        self.ts2vec_embedding = PatchEmbedding(
+            config.d_model, config.patch_size, config.stride, config.dropout
+        ).to(dtype=torch.bfloat16, device=device)
+        self.ts_reprogramming = ReprogrammingLayer(
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            d_keys=config.d_ff,
+            d_llm=self.d_llm,
+            attention_dropout=config.dropout,
+        ).to(dtype=torch.bfloat16, device=device)
+        self.patch_nums = int((config.seq_len - self.patch_size) / self.stride + 2)
+
+        # residual embedding, token embed on x_enc, and llm output will be added, speed up training
+        self.x_enc_residual_embed = FlattenHead(
+            nf=self.seq_len * self.output_dim,
+            seq_window=config.pred_len,
+            head_dropout=config.dropout,
+        ).to(dtype=torch.bfloat16, device=device)
+        x_enc_residual_embed_params = {
+            k.replace("output_projection.linear", "linear"): v
+            for k, v in torch.load(config.residual_path, map_location=device)[
+                "state_dict"
+            ].items()
+        }
+        self.x_enc_residual_embed.load_state_dict(x_enc_residual_embed_params)
+        for param in self.x_enc_residual_embed.parameters():
+            param.requires_grad = False
+
+        # outprojection
+        if config.task == "forecast":
+            # self.output_projection = AdaptiveFeatureAggregation(
+            #     llm_dim=config.llm_dim,
+            #     num_heads=config.n_heads,
+            #     d_ff=config.d_ff,
+            #     output_dim=config.output_dim,
+            #     dropout=config.dropout,
+            # ).to(dtype=torch.bfloat16, device=device)
+            self.y_base_embed = TokenEmbedding(
+                c_in=config.output_dim,
+                d_model=config.d_model,
+            ).to(dtype=torch.bfloat16, device=device)
+            self.output_projection = FusionReprogrammingLayer(
+                llm_dim=config.llm_dim,
+                num_heads=config.n_heads,
+                d_model=config.d_model,
+                d_ff=config.d_ff,
+                pred_len=config.pred_len,
+                output_dim=config.output_dim,
+                hidden_dim=config.output_dim * 4,
+                dropout=config.dropout,
+            ).to(dtype=torch.bfloat16, device=device)
+
+        self.normalize_layers = Normalize(config.enc_in, affine=False)
+
+        # cache setting
+        self.cache_dir = f"./src/models/cache/{config.data}/"
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir, exist_ok=True)
+
+    def forward(self, x_enc, x_mask, y, y_mask, stage="train", batch_idx=0):
+        B, T, N = x_enc.shape
+        x_enc = self.normalize_layers(x_enc, "norm")
+
+        x_enc_residual = self.x_enc_residual_embed(x_enc).unsqueeze(
+            -1
+        )  # [B, pred_len, N]
+
+        # x_enc statistic
+        x_enc = x_enc.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)
+        min_values = torch.min(x_enc, dim=1)[0]
+        max_values = torch.max(x_enc, dim=1)[0]
+        medians = torch.median(x_enc, dim=1).values
+        lags = self.calcute_lags(x_enc.float())
+        trends = x_enc.diff(dim=1).sum(dim=1)
+
+        prompt = []
+        for b in range(x_enc.shape[0]):
+            min_values_str = str(min_values[b].tolist()[0])
+            max_values_str = str(max_values[b].tolist()[0])
+            median_values_str = str(medians[b].tolist()[0])
+            lags_values_str = str(lags[b].tolist())
+            prompt_ = (
+                "<|im_start|>system\n"
+                "You are a multimodal time-series analysis expert. Your task is to integrate temporal patterns, and visual features to make precise predictions.\n<|im_end|>\n"
+                f"<|im_start|>Dataset description: {self.description}"
+                f"Task description: forecast the next {str(self.pred_len)} steps given the previous {str(self.seq_len)} steps information and corresponding image; "
+                "Statistics input: "
+                f"min value {min_values_str}, "
+                f"max value {max_values_str}, "
+                f"median value {median_values_str}, "
+                f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "
+                f"top 5 lags are : {lags_values_str}\n"
+                "Image input:"
+                "<|vision_start|><|image_pad|><|vision_end|>"
+            )
+
+            prompt.append(prompt_)
+
+        x_enc = x_enc.reshape(B, N, T).permute(0, 2, 1).contiguous()
+
+        # check cache
+        cache_file = os.path.join(self.cache_dir, f"{stage}_{batch_idx}.pt")
+
+        if os.path.exists(cache_file):
+            images_embeds = torch.load(
+                cache_file, map_location=x_enc.device, weights_only=False
+            )["data"]
+            image_grid_thw = torch.load(
+                cache_file, map_location=x_enc.device, weights_only=False
+            )["image_grid_thw"]
+            image_token_nums = torch.load(
+                cache_file, map_location=x_enc.device, weights_only=False
+            )["image_token_nums"]
+        else:
+            # create image tensor
+            x_image = tensor_line_plots(x_enc, flip=True)  # [B, 3, H, W]
+            image_inputs = self.image_processor(
+                images=x_image, videos=None, do_rescale=False
+            ).to(device=x_enc.device, dtype=x_enc.dtype)
+            images_embeds = self.visual(
+                image_inputs["pixel_values"], grid_thw=image_inputs["image_grid_thw"]
+            )
+            image_grid_thw = image_inputs["image_grid_thw"]
+            # recovery batch dim depend on image_grid_thw
+            image_token_nums = [
+                thw.prod().item() // self.merge_length for thw in image_grid_thw
+            ]
+            split_embeds = torch.split(images_embeds, image_token_nums, dim=0)
+            images_embeds = torch.nn.utils.rnn.pad_sequence(
+                split_embeds, batch_first=True
+            )
+
+            # images_embeds = images_embeds.reshape(B, -1, images_embeds.shape[-1])
+
+            # save cache
+            torch.save(
+                {
+                    "data": images_embeds.cpu(),
+                    "image_grid_thw": image_inputs["image_grid_thw"].cpu(),
+                    "image_token_nums": image_token_nums,
+                    "dtype": "bfloat16",
+                },
+                cache_file,
+                _use_new_zipfile_serialization=True,
+            )
+
+        # expand image token depend on the actual image_grid_thw
+        if image_grid_thw is not None:
+            for i in range(len(prompt)):
+                while self.image_token in prompt[i]:
+                    prompt[i] = prompt[i].replace(
+                        self.image_token,
+                        "<|placeholder|>" * (image_token_nums[i]),
+                        1,
+                    )
+                prompt[i] = prompt[i].replace("<|placeholder|>", self.image_token)
+
+        prompt = (
+            self.tokenizer(
+                prompt,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=2048,
+            )
+            .to(device=x_enc.device)
+            .input_ids
+        )
+        prompt_embeddings = self.llm_model.get_input_embeddings()(
+            prompt.to(x_enc.device)
+        )  # (batch, prompt_token, dim)
+
+        # x_enc embedding
+        # x_enc_embed, n_vars = self.ts2vec_embedding(
+        #     x_enc.permute(0, 2, 1).contiguous()
+        # )  # [B, patch_nums, llm_dim]
+        # x_enc_embed = self.ts_reprogramming(x_enc_embed, images_embeds, images_embeds)
+
+        # prompt add image
+        mask_image = prompt == self.model.config.image_token_id
+        mask_image_unsqueezed = mask_image.unsqueeze(-1)
+        mask_image_expanded = mask_image_unsqueezed.expand_as(prompt_embeddings)
+        image_mask = mask_image_expanded.to(x_enc.device)
+
+        prompt_embeddings = prompt_embeddings.masked_scatter(image_mask, images_embeds)
+
+        # add <im_end> and assitant embed
+        im_end_prompt = "<|im_end|>\n<|im_start|>assistant\n"
+        im_end_prompt = (
+            self.tokenizer(
+                im_end_prompt,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=2048,
+            )
+            .to(device=x_enc.device)
+            .input_ids
+        )
+        im_end_embed = self.llm_model.get_input_embeddings()(im_end_prompt)
+        im_end_embed = im_end_embed.expand(B, -1, -1).contiguous()
+
+        llm_enc_out = torch.cat(
+            [prompt_embeddings, im_end_embed], dim=1
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
 

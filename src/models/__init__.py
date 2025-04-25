@@ -1,5 +1,5 @@
 from .model import GPT2forVSB, GPT4TS
-from .all4one import ALL4ONE, ALL4ONEonlyTS2VEC, ALL4ONEFAST
+from .all4one import ALL4ONE, ALL4ONEonlyTS2VEC, ALL4ONEFAST, ALL4ONEABLATION
 from .ts2vec import TS2Vec
 
 model_factory = {
@@ -7,6 +7,7 @@ model_factory = {
     "GPT4TS": GPT4TS,
     "ALL4ONE": ALL4ONE,
     "ALL4ONEFAST": ALL4ONEFAST,
+    "ALL4ONEABLATION": ALL4ONEABLATION,
     "ALL4ONEonlyTS2VEC": ALL4ONEonlyTS2VEC,
     "TS2VEC": TS2Vec,
 }
