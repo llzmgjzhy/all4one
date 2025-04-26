@@ -894,7 +894,9 @@ class ALL4ONEABLATION(nn.Module):
         llm_enc_out = torch.cat(
             [prompt_embeddings, im_end_embed], dim=1
         )  # [B, token_num , llm_dim]
-        dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state
+        dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state[
+            :, -self.pred_len :, :
+        ]
 
         y_base = self.y_base_embed(x_enc_residual)
         dec_out = self.output_projection(

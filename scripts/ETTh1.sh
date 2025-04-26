@@ -8,7 +8,7 @@ model=ALL4ONEABLATION
 # model=ALL4ONEonlyTS2VEC
 batch_size=24
 output_dim=1
-epochs=20
+epochs=10
 
 for percent in 100
 do
@@ -33,7 +33,7 @@ python ./src/main_long_forecast.py \
     --batch_size $batch_size \
     --lradj 'COS' \
     --lr $lr \
-    --weight_decay 1e-4 \
+    --weight_decay 1e-3 \
     --epochs $epochs \
     --d_model 32 \
     --n_heads 8 \
