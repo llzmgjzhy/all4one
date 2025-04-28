@@ -160,10 +160,9 @@ class FusionReprogrammingLayer(nn.Module):
         )
         self.norm_kv = Qwen2RMSNorm(llm_dim, eps=1e-06)
         self.norm_q = Qwen2RMSNorm(d_model, eps=1e-06)
-        self.norm_ffn = Qwen2RMSNorm(d_model, eps=1e-06)
-        self.mlp = SwiGLUMLP(in_features=d_model, hidden_features=d_model * 2)
         self.norm = Qwen2RMSNorm(d_model, eps=1e-06)
         self.dropout = nn.Dropout(dropout)
+        self.scale = nn.Parameter(torch.zeros(1))
 
     def forward(self, x, y_base, base):
         B, T, N = x.shape
@@ -171,18 +170,12 @@ class FusionReprogrammingLayer(nn.Module):
         x = self.norm_kv(x)
         q = self.norm_q(y_base)
 
-        attn_out = self.attention(q, x, x)
-        increment = y_base + self.dropout(attn_out)  # [B, pred_len, output_dim]
-
-        # FFN
-        increment = increment + self.dropout(
-            self.mlp(self.norm_ffn(increment))
-        )  # [B, pred_len, output_dim]
+        increment = self.attention(q, x, x)
 
         # Token embedding
-        increment = self.tokenEmbed(self.norm(increment))
+        increment = self.dropout(self.tokenEmbed(self.norm(increment)))
         # [B, pred_len, output_dim]
-        fused = base + increment  # [B, pred_len, output_dim]
+        fused = base + self.scale * increment  # [B, pred_len, output_dim]
 
         return fused  # [B, pred_len, output_dim]
 
