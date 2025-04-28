@@ -180,7 +180,7 @@ class FusionReprogrammingLayer(nn.Module):
         )  # [B, pred_len, output_dim]
 
         # Token embedding
-        increment = self.tokenEmbed(increment)
+        increment = self.tokenEmbed(self.norm(increment))
         # [B, pred_len, output_dim]
         fused = base + increment  # [B, pred_len, output_dim]
 

@@ -80,7 +80,19 @@ def main(config):
 
     # initialize the scheduler
     if config.lradj == "COS":
-        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=20, eta_min=1e-8)
+        warmup_epochs = config.epochs * 0.2
+        total_epochs = config.epochs
+        warmup_scheduler = lr_scheduler.LinearLR(
+            optimizer, start_factor=0.1, total_iters=warmup_epochs
+        )
+        cosine_scheduler = lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=total_epochs - warmup_epochs, eta_min=1e-8
+        )
+        scheduler = lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[warmup_epochs],
+        )
     else:
         scheduler = lr_scheduler.OneCycleLR(
             optimizer=optimizer,
