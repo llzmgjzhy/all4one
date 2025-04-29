@@ -150,7 +150,7 @@ class FusionReprogrammingLayer(nn.Module):
             d_model=d_model,
             n_heads=num_heads,
             d_keys=d_ff,
-            d_llm=llm_dim,
+            d_llm=d_ff,
             output_dim=d_model,
             attention_dropout=dropout,
         )
@@ -158,11 +158,11 @@ class FusionReprogrammingLayer(nn.Module):
             c_in=d_model,
             d_model=output_dim,
         )
-        self.norm_kv = Qwen2RMSNorm(llm_dim, eps=1e-06)
+        self.norm_kv = Qwen2RMSNorm(d_ff, eps=1e-06)
         self.norm_q = Qwen2RMSNorm(d_model, eps=1e-06)
         self.norm = Qwen2RMSNorm(d_model, eps=1e-06)
         self.dropout = nn.Dropout(dropout)
-        self.scale = nn.Parameter(torch.zeros(1))
+        self.scale = nn.Parameter(torch.ones(1) * 0.01)
 
     def forward(self, x, y_base, base):
         B, T, N = x.shape
@@ -788,7 +788,8 @@ class ALL4ONEABLATION(nn.Module):
                 f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "
                 f"top 5 lags are : {lags_values_str}\n"
                 "Image input:"
-                "<|vision_start|><|image_pad|><|vision_end|>"
+                "<|vision_start|><|image_pad|><|vision_end|>\n"
+                # "Time series input:"
             )
 
             prompt.append(prompt_)
@@ -901,7 +902,7 @@ class ALL4ONEABLATION(nn.Module):
             [prompt_embeddings, im_end_embed], dim=1
         )  # [B, token_num , llm_dim]
         dec_out = self.llm_model(inputs_embeds=llm_enc_out).last_hidden_state[
-            :, -self.pred_len :, :
+            :, -self.pred_len :, : self.d_ff
         ]
 
         y_base = self.y_base_embed(x_enc_residual)

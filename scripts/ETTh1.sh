@@ -14,7 +14,7 @@ for percent in 100
 do
 for pred_len in 96
 do
-for lr in 0.001
+for lr in 0.0001
 do
 
 python ./src/main_long_forecast.py \

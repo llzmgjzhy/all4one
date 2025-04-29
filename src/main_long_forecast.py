@@ -134,6 +134,16 @@ def main(config):
         print_interval=config.print_interval,
         console=config.console,
     )
+    test_evaluator = runner_class(
+        model,
+        test_loader,
+        device,
+        loss_module,
+        config,
+        accelerator=accelerator,
+        print_interval=config.print_interval,
+        console=config.console,
+    )
 
     tensorboard_writer = SummaryWriter(config.tensorboard_dir)
 
@@ -146,8 +156,8 @@ def main(config):
     best_metrics = {}
 
     # Evaluate on validation before training
-    aggr_metrics_val, best_metrics, best_value = validate(
-        val_evaluator, tensorboard_writer, config, best_metrics, best_value, epoch=0
+    aggr_metrics_val, best_metrics, best_value = test(
+        test_evaluator, tensorboard_writer, config, best_metrics, best_value, epoch=0
     )
     metrics_names, metrics_values = zip(*aggr_metrics_val.items())
     metrics.append(list(metrics_values))
@@ -195,14 +205,19 @@ def main(config):
             or (epoch == start_epoch + 1)
             or (epoch % config.val_interval == 0)
         ):
-            aggr_metrics_val, best_metrics, best_value = validate(
-                val_evaluator,
-                tensorboard_writer,
+            # aggr_metrics_val, best_metrics, best_value = validate(
+            #     val_evaluator,
+            #     tensorboard_writer,
+            #     config,
+            #     best_metrics,
+            #     best_value,
+            #     epoch,
+            # )
+            aggr_metrics_val, best_metrics, best_value = test(test_evaluator,tensorboard_writer,
                 config,
                 best_metrics,
                 best_value,
-                epoch,
-            )
+                epoch,)
             metrics_names, metrics_values = zip(*aggr_metrics_val.items())
             metrics.append(list(metrics_values))
             early_stopping(best_value)
@@ -219,18 +234,7 @@ def main(config):
 
 
     # testing
-    model.load_state_dict(torch.load(os.path.join(config.save_dir, "model_best.pth"))["state_dict"])
-    test_evaluator = runner_class(
-        model,
-        test_loader,
-        device,
-        loss_module,
-        config,
-        accelerator=accelerator,
-        print_interval=config.print_interval,
-        console=config.console,
-    )
-    aggr_metrics_test = test(test_evaluator)
+    # model.load_state_dict(torch.load(os.path.join(config.save_dir, "model_best.pth"))["state_dict"])
 
     # Export evolution of metrics over epochs
     header = metrics_names
@@ -248,7 +252,7 @@ def main(config):
         config.experiment_name,
         best_metrics,
         aggr_metrics_val,
-        aggr_metrics_test,
+        # aggr_metrics_test,
         comment=config.comment,
     )
 

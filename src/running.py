@@ -479,7 +479,7 @@ def validate(
     return aggr_metrics, best_metrics, best_value
 
 
-def test(test_evaluator):
+def test(test_evaluator, tensorboard_writer, config, best_metrics, best_value, epoch):
     """Run an evaluation on the validation set while logging metrics, and handle outcome"""
 
     logger.info("Testing on test set ...")
@@ -512,12 +512,35 @@ def test(test_evaluator):
     logger.info("Avg sample test. time: {} seconds".format(avg_val_sample_time))
 
     print()
-    print_str = "Epoch Testing Summary: "
+    print_str = "Epoch {} Testing Summary: ".format(epoch)
     for k, v in aggr_metrics.items():
+        tensorboard_writer.add_scalar("{}/test".format(k), v, epoch)
         print_str += "{}: {:8f} | ".format(k, v)
     logger.info(print_str)
+    key_metric = "test_" + config.key_metric
 
-    return aggr_metrics
+    if config.key_metric in NEG_METRICS:
+        condition = aggr_metrics[key_metric] < best_value
+    else:
+        condition = aggr_metrics[key_metric] > best_value
+    if condition:
+        best_value = aggr_metrics[key_metric]
+        if not config.no_savemodel:
+            utils.save_model(
+                os.path.join(config.save_dir, "model_best.pth"),
+                epoch,
+                test_evaluator.model,
+            )
+        best_metrics = aggr_metrics.copy()
+
+        pred_filepath = os.path.join(config.pred_dir, "best_predictions")
+        for key in per_batch.keys():
+            per_batch[key] = np.array(
+                per_batch[key], dtype=object
+            )  # resolve issue of inconsistent array sizes
+        np.savez(pred_filepath, **per_batch)
+
+    return aggr_metrics, best_metrics, best_value
 
 
 def check_progress(epoch):
