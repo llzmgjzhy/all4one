@@ -512,7 +512,7 @@ def test(test_evaluator, tensorboard_writer, config, best_metrics, best_value, e
     logger.info("Avg sample test. time: {} seconds".format(avg_val_sample_time))
 
     print()
-    print_str = "Epoch {} Testing Summary: ".format(epoch)
+    print_str = "Testing Summary: "
     for k, v in aggr_metrics.items():
         tensorboard_writer.add_scalar("{}/test".format(k), v, epoch)
         print_str += "{}: {:8f} | ".format(k, v)

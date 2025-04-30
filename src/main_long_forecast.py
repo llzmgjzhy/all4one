@@ -235,6 +235,11 @@ def main(config):
 
     # testing
     # model.load_state_dict(torch.load(os.path.join(config.save_dir, "model_best.pth"))["state_dict"])
+    # aggr_metrics_test, best_metrics, best_value = test(test_evaluator,tensorboard_writer,
+    #             config,
+    #             best_metrics,
+    #             best_value,
+    #             epoch,)
 
     # Export evolution of metrics over epochs
     header = metrics_names
